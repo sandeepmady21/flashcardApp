@@ -4,22 +4,9 @@ import SwiftUI
 
 struct Flashcard: Identifiable {
     let id = UUID()
-    let question: String
-    let answer: String
+    var question: String
+    var answer: String
 }
-
-// MARK: - Sample Data
-
-let sampleCards: [Flashcard] = [
-    Flashcard(question: "What is the capital of France?", answer: "Paris"),
-    Flashcard(question: "What year did the Moon landing happen?", answer: "1969"),
-    Flashcard(question: "What is the powerhouse of the cell?", answer: "Mitochondria"),
-    Flashcard(question: "Who painted the Mona Lisa?", answer: "Leonardo da Vinci"),
-    Flashcard(question: "What is the chemical symbol for gold?", answer: "Au"),
-    Flashcard(question: "How many planets are in the solar system?", answer: "8"),
-    Flashcard(question: "What language is primarily used for iOS development?", answer: "Swift"),
-    Flashcard(question: "What is the largest ocean on Earth?", answer: "Pacific Ocean"),
-]
 
 // MARK: - App Entry Point
 
@@ -35,111 +22,103 @@ struct FlashcardApp: App {
 // MARK: - Content View
 
 struct ContentView: View {
-    @State private var cards: [Flashcard] = sampleCards
+    @State private var cards: [Flashcard] = []
     @State private var currentIndex: Int = 0
     @State private var isFlipped: Bool = false
-    @State private var dragOffset: CGSize = .zero
-    @State private var knownCount: Int = 0
-    @State private var learningCount: Int = 0
-    @State private var isFinished: Bool = false
-
-    var progress: Double {
-        guard !cards.isEmpty else { return 1.0 }
-        return Double(knownCount + learningCount) / Double(cards.count)
-    }
+    @State private var showingAddSheet: Bool = false
 
     var body: some View {
-        ZStack {
-            Color(.systemGroupedBackground)
-                .ignoresSafeArea()
+        NavigationStack {
+            ZStack {
+                Color(.systemGroupedBackground)
+                    .ignoresSafeArea()
 
-            if isFinished {
-                finishedView
-            } else {
-                mainView
+                if cards.isEmpty {
+                    emptyView
+                } else {
+                    cardBrowser
+                }
+            }
+            .navigationTitle("Flashcards")
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button {
+                        showingAddSheet = true
+                    } label: {
+                        Image(systemName: "plus.circle.fill")
+                            .font(.title3)
+                    }
+                }
+                ToolbarItem(placement: .topBarLeading) {
+                    if !cards.isEmpty {
+                        Text("\(currentIndex + 1) / \(cards.count)")
+                            .font(.subheadline)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
+            .sheet(isPresented: $showingAddSheet) {
+                AddCardView { question, answer in
+                    cards.append(Flashcard(question: question, answer: answer))
+                    if cards.count == 1 { currentIndex = 0 }
+                }
             }
         }
     }
 
-    // MARK: - Main Card View
+    // MARK: - Empty State
 
-    var mainView: some View {
-        VStack(spacing: 24) {
-            // Header
-            HStack {
-                Text("Flashcards")
-                    .font(.largeTitle.bold())
-                Spacer()
-                Text("\(currentIndex + 1)/\(cards.count)")
-                    .font(.headline)
-                    .foregroundStyle(.secondary)
+    var emptyView: some View {
+        VStack(spacing: 16) {
+            Image(systemName: "rectangle.stack")
+                .font(.system(size: 50))
+                .foregroundStyle(.secondary)
+            Text("No flashcards yet")
+                .font(.title3)
+                .foregroundStyle(.secondary)
+            Button("Add Your First Card") {
+                showingAddSheet = true
             }
-            .padding(.horizontal)
+            .buttonStyle(.borderedProminent)
+        }
+    }
 
-            // Progress Bar
-            ProgressView(value: progress)
-                .tint(.blue)
-                .padding(.horizontal)
+    // MARK: - Card Browser
 
-            // Score
-            HStack(spacing: 32) {
-                Label("\(knownCount)", systemImage: "checkmark.circle.fill")
-                    .foregroundStyle(.green)
-                    .font(.headline)
-                Label("\(learningCount)", systemImage: "arrow.counterclockwise.circle.fill")
-                    .foregroundStyle(.orange)
-                    .font(.headline)
-            }
-
+    var cardBrowser: some View {
+        VStack(spacing: 32) {
             Spacer()
 
             // Card
-            if currentIndex < cards.count {
-                cardView(for: cards[currentIndex])
-                    .offset(dragOffset)
-                    .rotationEffect(.degrees(Double(dragOffset.width) / 20))
-                    .gesture(
-                        DragGesture()
-                            .onChanged { value in
-                                dragOffset = value.translation
-                            }
-                            .onEnded { value in
-                                handleSwipe(value.translation)
-                            }
-                    )
-                    .animation(.spring(response: 0.4), value: dragOffset)
+            cardView(for: cards[currentIndex])
+
+            // Navigation
+            HStack(spacing: 40) {
+                Button {
+                    goToPrevious()
+                } label: {
+                    Image(systemName: "chevron.left.circle.fill")
+                        .font(.system(size: 44))
+                        .foregroundStyle(currentIndex > 0 ? .blue : .gray.opacity(0.3))
+                }
+                .disabled(currentIndex == 0)
+
+                Button {
+                    goToNext()
+                } label: {
+                    Image(systemName: "chevron.right.circle.fill")
+                        .font(.system(size: 44))
+                        .foregroundStyle(currentIndex < cards.count - 1 ? .blue : .gray.opacity(0.3))
+                }
+                .disabled(currentIndex >= cards.count - 1)
             }
+
+            Text("Tap card to flip")
+                .font(.caption)
+                .foregroundStyle(.secondary)
 
             Spacer()
-
-            // Instructions
-            HStack {
-                VStack {
-                    Image(systemName: "arrow.left")
-                    Text("Still Learning")
-                        .font(.caption)
-                }
-                .foregroundStyle(.orange)
-
-                Spacer()
-
-                Text("Tap to flip")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-
-                Spacer()
-
-                VStack {
-                    Image(systemName: "arrow.right")
-                    Text("Got It!")
-                        .font(.caption)
-                }
-                .foregroundStyle(.green)
-            }
-            .padding(.horizontal, 40)
-            .padding(.bottom)
         }
-        .padding(.top)
     }
 
     // MARK: - Card View
@@ -182,7 +161,7 @@ struct ContentView: View {
                 .rotation3DEffect(.degrees(isFlipped ? 180 : 0), axis: (x: 0, y: 1, z: 0))
                 .opacity(isFlipped ? 0 : 1)
         }
-        .frame(height: 300)
+        .frame(height: 280)
         .padding(.horizontal, 24)
         .onTapGesture {
             withAnimation(.easeInOut(duration: 0.35)) {
@@ -191,80 +170,57 @@ struct ContentView: View {
         }
     }
 
-    // MARK: - Finished View
+    // MARK: - Navigation
 
-    var finishedView: some View {
-        VStack(spacing: 20) {
-            Image(systemName: "party.popper.fill")
-                .font(.system(size: 60))
-                .foregroundStyle(.yellow)
-
-            Text("All Done!")
-                .font(.largeTitle.bold())
-
-            VStack(spacing: 8) {
-                Text("✅ Known: \(knownCount)")
-                    .font(.title3)
-                Text("🔄 Still Learning: \(learningCount)")
-                    .font(.title3)
-            }
-            .padding()
-
-            Button {
-                resetDeck()
-            } label: {
-                Label("Start Over", systemImage: "arrow.counterclockwise")
-                    .font(.headline)
-                    .foregroundStyle(.white)
-                    .padding()
-                    .frame(maxWidth: .infinity)
-                    .background(.blue, in: RoundedRectangle(cornerRadius: 14))
-            }
-            .padding(.horizontal, 40)
-        }
-    }
-
-    // MARK: - Logic
-
-    func handleSwipe(_ translation: CGSize) {
-        if translation.width > 100 {
-            // Swipe right → known
-            knownCount += 1
-            advanceCard()
-        } else if translation.width < -100 {
-            // Swipe left → still learning
-            learningCount += 1
-            advanceCard()
-        } else {
-            dragOffset = .zero
-        }
-    }
-
-    func advanceCard() {
-        withAnimation(.easeOut(duration: 0.3)) {
-            dragOffset = CGSize(
-                width: dragOffset.width > 0 ? 500 : -500,
-                height: 0
-            )
-        }
-
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-            dragOffset = .zero
-            isFlipped = false
-            if currentIndex + 1 < cards.count {
-                currentIndex += 1
-            } else {
-                isFinished = true
-            }
-        }
-    }
-
-    func resetDeck() {
-        currentIndex = 0
-        knownCount = 0
-        learningCount = 0
+    func goToNext() {
+        guard currentIndex < cards.count - 1 else { return }
         isFlipped = false
-        isFinished = false
-        cards.shuffle()
+        currentIndex += 1
+    }
+
+    func goToPrevious() {
+        guard currentIndex > 0 else { return }
+        isFlipped = false
+        currentIndex -= 1
+    }
+}
+
+// MARK: - Add Card View
+
+struct AddCardView: View {
+    @Environment(\.dismiss) var dismiss
+    @State private var question: String = ""
+    @State private var answer: String = ""
+    var onAdd: (String, String) -> Void
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section("Question") {
+                    TextField("Enter question", text: $question, axis: .vertical)
+                        .lineLimit(3...6)
+                }
+                Section("Answer") {
+                    TextField("Enter answer", text: $answer, axis: .vertical)
+                        .lineLimit(3...6)
+                }
+            }
+            .navigationTitle("New Card")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Add") {
+                        onAdd(question.trimmingCharacters(in: .whitespaces),
+                               answer.trimmingCharacters(in: .whitespaces))
+                        dismiss()
+                    }
+                    .disabled(question.trimmingCharacters(in: .whitespaces).isEmpty ||
+                              answer.trimmingCharacters(in: .whitespaces).isEmpty)
+                }
+            }
+        }
     }
 }
