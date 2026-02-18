@@ -30,7 +30,7 @@ struct ContentView: View {
     var body: some View {
         NavigationStack {
             ZStack {
-                Color(.systemGroupedBackground)
+                Color(red: 0.91, green: 0.87, blue: 0.97)
                     .ignoresSafeArea()
 
                 if cards.isEmpty {
