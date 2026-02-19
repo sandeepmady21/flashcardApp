@@ -126,43 +126,54 @@ struct ContentView: View {
     func cardView(for card: Flashcard) -> some View {
         ZStack {
             // Back (answer)
-            RoundedRectangle(cornerRadius: 20)
-                .fill(.white)
-                .shadow(color: .black.opacity(0.1), radius: 10, y: 5)
+            RoundedRectangle(cornerRadius: 28)
+                .fill(
+                    LinearGradient(
+                        colors: [Color(red: 0.55, green: 0.4, blue: 0.95),
+                                 Color(red: 0.4, green: 0.3, blue: 0.85)],
+                        startPoint: .topLeading,
+                        endPoint: .bottomTrailing
+                    )
+                )
+                .shadow(color: Color(red: 0.5, green: 0.35, blue: 0.9).opacity(0.4), radius: 20, y: 10)
                 .overlay(
-                    VStack(spacing: 12) {
+                    VStack(spacing: 16) {
                         Text("ANSWER")
                             .font(.caption.bold())
-                            .foregroundStyle(.secondary)
+                            .tracking(2)
+                            .foregroundStyle(.white.opacity(0.6))
                         Text(card.answer)
-                            .font(.title.bold())
+                            .font(.system(size: 32, weight: .bold, design: .rounded))
                             .multilineTextAlignment(.center)
-                            .padding(.horizontal)
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 24)
                     }
                 )
                 .rotation3DEffect(.degrees(isFlipped ? 0 : -180), axis: (x: 0, y: 1, z: 0))
                 .opacity(isFlipped ? 1 : 0)
 
             // Front (question)
-            RoundedRectangle(cornerRadius: 20)
+            RoundedRectangle(cornerRadius: 28)
                 .fill(.white)
-                .shadow(color: .black.opacity(0.1), radius: 10, y: 5)
+                .shadow(color: .black.opacity(0.08), radius: 20, y: 10)
                 .overlay(
-                    VStack(spacing: 12) {
+                    VStack(spacing: 16) {
                         Text("QUESTION")
                             .font(.caption.bold())
+                            .tracking(2)
                             .foregroundStyle(.secondary)
                         Text(card.question)
-                            .font(.title2.bold())
+                            .font(.system(size: 26, weight: .bold, design: .rounded))
                             .multilineTextAlignment(.center)
-                            .padding(.horizontal)
+                            .foregroundStyle(.primary)
+                            .padding(.horizontal, 24)
                     }
                 )
                 .rotation3DEffect(.degrees(isFlipped ? 180 : 0), axis: (x: 0, y: 1, z: 0))
                 .opacity(isFlipped ? 0 : 1)
         }
-        .frame(height: 280)
-        .padding(.horizontal, 24)
+        .frame(height: 380)
+        .padding(.horizontal, 20)
         .onTapGesture {
             withAnimation(.easeInOut(duration: 0.35)) {
                 isFlipped.toggle()
