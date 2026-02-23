@@ -1,6 +1,9 @@
 import SwiftUI
 import Combine
 
+// I need to learn this.
+// TODO: How to test this on iphone?
+
 // MARK: - Data Model
 
 struct Flashcard: Identifiable, Codable {
