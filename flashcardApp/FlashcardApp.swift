@@ -10,6 +10,31 @@ struct Flashcard: Identifiable, Codable {
     var createdAt: Date = Date()
 }
 
+// MARK: - Cute Theme
+
+struct CuteTheme {
+    static let encouragements = [
+        "Amazing! ✨",
+        "You're doing great! 🌟",
+        "So smart! 🐰",
+        "Nailed it! 🌸",
+        "Keep going! 💫",
+        "Wonderful! 🦋",
+    ]
+
+    static func randomEncouragement() -> String {
+        encouragements.randomElement() ?? "Amazing! ✨"
+    }
+
+    static let pink = Color(red: 1.0, green: 0.78, blue: 0.82)
+    static let softPink = Color(red: 1.0, green: 0.93, blue: 0.95)
+    static let peach = Color(red: 1.0, green: 0.89, blue: 0.82)
+    static let lilac = Color(red: 0.90, green: 0.85, blue: 1.0)
+    static let mint = Color(red: 0.82, green: 0.96, blue: 0.92)
+    static let cream = Color(red: 1.0, green: 0.98, blue: 0.95)
+    static let sky = Color(red: 0.85, green: 0.92, blue: 1.0)
+}
+
 // MARK: - Storage
 
 class CardStore: ObservableObject {
@@ -34,9 +59,7 @@ class CardStore: ObservableObject {
         }
     }
 
-    func add(_ card: Flashcard) {
-        cards.append(card)
-    }
+    func add(_ card: Flashcard) { cards.append(card) }
 
     func update(_ card: Flashcard) {
         if let index = cards.firstIndex(where: { $0.id == card.id }) {
@@ -49,9 +72,7 @@ class CardStore: ObservableObject {
         cards.remove(at: index)
     }
 
-    func shuffle() {
-        cards.shuffle()
-    }
+    func shuffle() { cards.shuffle() }
 }
 
 // MARK: - App Entry Point
@@ -68,6 +89,410 @@ struct FlashcardApp: App {
     }
 }
 
+// MARK: - Floating Accent
+
+struct FloatingAccent: View {
+    let emoji: String
+    let size: CGFloat
+    let startX: CGFloat
+    let startY: CGFloat
+    let index: Int
+
+    @State private var yOffset: CGFloat = 0
+    @State private var xOffset: CGFloat = 0
+    @State private var opacity: Double = 0
+    @State private var rotation: Double = 0
+
+    var body: some View {
+        Text(emoji)
+            .font(.system(size: size))
+            .opacity(opacity)
+            .offset(x: xOffset, y: yOffset)
+            .rotationEffect(.degrees(rotation))
+            .position(x: startX, y: startY)
+            .onAppear {
+                let dur = 2.5 + Double(index % 7) * 0.5
+                let dir: CGFloat = index % 2 == 0 ? 1 : -1
+                withAnimation(
+                    .easeInOut(duration: dur)
+                    .repeatForever(autoreverses: true)
+                    .delay(Double(index) * 0.15)
+                ) {
+                    yOffset = dir * CGFloat(6 + (index * 3) % 12)
+                    xOffset = -dir * CGFloat(3 + (index * 5) % 8)
+                    opacity = 0.25 + Double(index % 5) * 0.06
+                    rotation = Double(-10 + (index * 7) % 20)
+                }
+            }
+    }
+}
+
+struct FloatingEmojiData: Identifiable {
+    let id: Int
+    let emoji: String
+    let size: CGFloat
+    let xFraction: CGFloat
+    let yFraction: CGFloat
+}
+
+struct FloatingEmojisView: View {
+    let items: [FloatingEmojiData]
+
+    init() {
+        let emojis = [
+            "🌸", "☁️", "✨", "🌷", "💫", "🦋", "🐰", "🐮",
+            "🐼", "🍓", "🌈", "💕", "🐧", "🍰", "🐑", "🌻",
+            "🐥", "🍡", "☀️", "🐷", "🧁", "🌺", "🦊", "💐",
+            "🌙", "🐻", "🍩", "⭐", "🌿", "🐝", "🎀", "🍪",
+            "🐣", "🌼", "🐾", "🎈", "🐨", "🍬", "☘️", "🧸",
+            "💛", "🌴", "🐇", "🪻", "🩵", "🍀", "🫖", "🎐"
+        ]
+
+        let cols = 6
+        let rows = 8
+
+        let cellW = 1.0 / CGFloat(cols)
+        let cellH = 1.0 / CGFloat(rows)
+
+        var generated: [FloatingEmojiData] = []
+        var emojiIndex = 0
+
+        for row in 0..<rows {
+            for col in 0..<cols {
+                guard emojiIndex < emojis.count else { break }
+
+                let jitterX = CGFloat((emojiIndex * 173 + 67) % 100) / 100.0 * 0.6 + 0.2
+                let jitterY = CGFloat((emojiIndex * 239 + 43) % 100) / 100.0 * 0.6 + 0.2
+
+                let xf = (CGFloat(col) + jitterX) * cellW
+                let yf = (CGFloat(row) + jitterY) * cellH
+
+                let size = CGFloat(17 + (emojiIndex * 31 + 7) % 13)
+
+                generated.append(FloatingEmojiData(
+                    id: emojiIndex,
+                    emoji: emojis[emojiIndex],
+                    size: size,
+                    xFraction: xf,
+                    yFraction: yf
+                ))
+                emojiIndex += 1
+            }
+        }
+
+        self.items = generated
+    }
+
+    var body: some View {
+        GeometryReader { geo in
+            let w = geo.size.width
+            let h = geo.size.height
+            ForEach(items) { item in
+                FloatingAccent(
+                    emoji: item.emoji,
+                    size: item.size,
+                    startX: item.xFraction * w,
+                    startY: item.yFraction * h,
+                    index: item.id
+                )
+            }
+        }
+        .allowsHitTesting(false)
+    }
+}
+
+// MARK: - Floating Encouragement Words
+
+struct FloatingWord: View {
+    let text: String
+    let startX: CGFloat
+    let startY: CGFloat
+    let index: Int
+
+    @State private var yOffset: CGFloat = 0
+    @State private var opacity: Double = 0
+    @State private var rotation: Double = 0
+
+    var body: some View {
+        Text(text)
+            .font(.system(size: 13, weight: .semibold, design: .rounded))
+            .foregroundStyle(Color(red: 0.75, green: 0.55, blue: 0.70))
+            .opacity(opacity)
+            .offset(y: yOffset)
+            .rotationEffect(.degrees(rotation))
+            .position(x: startX, y: startY)
+            .onAppear {
+                let dur = 3.0 + Double(index % 5) * 0.7
+                let dir: CGFloat = index % 2 == 0 ? 1 : -1
+                withAnimation(
+                    .easeInOut(duration: dur)
+                    .repeatForever(autoreverses: true)
+                    .delay(Double(index) * 0.3)
+                ) {
+                    yOffset = dir * CGFloat(5 + index % 8)
+                    opacity = 0.12 + Double(index % 4) * 0.03
+                    rotation = Double(-6 + (index * 3) % 12)
+                }
+            }
+    }
+}
+
+struct FloatingWordsData: Identifiable {
+    let id: Int
+    let text: String
+    let xFraction: CGFloat
+    let yFraction: CGFloat
+}
+
+struct FloatingWordsView: View {
+    let items: [FloatingWordsData]
+
+    init() {
+        let words = [
+            "you got this!", "keep going ♡", "so smart!", "doing great!",
+            "amazing!", "believe!", "you're a star ☆", "almost there!",
+            "don't give up!", "wonderful!", "so proud ♡", "go go go!"
+        ]
+
+        let cols = 3
+        let rows = 4
+        let cellW = 1.0 / CGFloat(cols)
+        let cellH = 1.0 / CGFloat(rows)
+
+        var generated: [FloatingWordsData] = []
+        var wordIndex = 0
+
+        for row in 0..<rows {
+            for col in 0..<cols {
+                guard wordIndex < words.count else { break }
+
+                let jitterX = CGFloat((wordIndex * 211 + 89) % 100) / 100.0 * 0.5 + 0.25
+                let jitterY = CGFloat((wordIndex * 167 + 53) % 100) / 100.0 * 0.5 + 0.25
+
+                let xf = (CGFloat(col) + jitterX) * cellW
+                let yf = (CGFloat(row) + jitterY) * cellH
+
+                generated.append(FloatingWordsData(
+                    id: wordIndex,
+                    text: words[wordIndex],
+                    xFraction: xf,
+                    yFraction: yf
+                ))
+                wordIndex += 1
+            }
+        }
+
+        self.items = generated
+    }
+
+    var body: some View {
+        GeometryReader { geo in
+            let w = geo.size.width
+            let h = geo.size.height
+            ForEach(items) { item in
+                FloatingWord(
+                    text: item.text,
+                    startX: item.xFraction * w,
+                    startY: item.yFraction * h,
+                    index: item.id
+                )
+            }
+        }
+        .allowsHitTesting(false)
+    }
+}
+
+// MARK: - Empty State View
+
+struct EmptyStateView: View {
+    let onAdd: () -> Void
+
+    var body: some View {
+        VStack(spacing: 20) {
+            HStack(spacing: -8) {
+                Text("🐮").font(.system(size: 44)).rotationEffect(.degrees(-10))
+                Text("🐰").font(.system(size: 52))
+                Text("🐼").font(.system(size: 44)).rotationEffect(.degrees(10))
+            }
+
+            Text("No cards yet!")
+                .font(.title2.bold())
+                .foregroundStyle(.primary.opacity(0.7))
+
+            Text("Let's make some adorable flashcards ✨")
+                .font(.subheadline)
+                .foregroundStyle(.secondary)
+
+            Button(action: onAdd) {
+                HStack(spacing: 8) {
+                    Text("✨")
+                    Text("Create First Card")
+                        .font(.headline)
+                }
+                .foregroundStyle(.white)
+                .padding(.horizontal, 28)
+                .padding(.vertical, 14)
+                .background(
+                    LinearGradient(
+                        colors: [CuteTheme.pink, Color(red: 0.82, green: 0.55, blue: 0.72)],
+                        startPoint: .leading,
+                        endPoint: .trailing
+                    ),
+                    in: Capsule()
+                )
+                .shadow(color: CuteTheme.pink.opacity(0.4), radius: 10, y: 5)
+            }
+            .padding(.top, 8)
+        }
+    }
+}
+
+// MARK: - Single Card View
+
+struct FlashcardView: View {
+    let card: Flashcard
+    let cardIndex: Int
+    @Binding var isFlipped: Bool
+
+    private let cardColors: [(Color, Color)] = [
+        (Color(red: 0.95, green: 0.60, blue: 0.65), Color(red: 0.85, green: 0.45, blue: 0.58)),
+        (Color(red: 0.65, green: 0.72, blue: 0.95), Color(red: 0.50, green: 0.58, blue: 0.85)),
+        (Color(red: 0.70, green: 0.88, blue: 0.75), Color(red: 0.50, green: 0.75, blue: 0.60)),
+        (Color(red: 0.90, green: 0.72, blue: 0.55), Color(red: 0.80, green: 0.58, blue: 0.45)),
+        (Color(red: 0.78, green: 0.65, blue: 0.90), Color(red: 0.65, green: 0.48, blue: 0.80)),
+    ]
+
+    var body: some View {
+        let colorPair = cardColors[cardIndex % cardColors.count]
+
+        ZStack {
+            answerSide(colorPair: colorPair)
+            questionSide
+        }
+        .frame(height: 360)
+        .padding(.horizontal, 20)
+        .onTapGesture {
+            withAnimation(.spring(response: 0.4, dampingFraction: 0.8)) {
+                isFlipped.toggle()
+            }
+            UIImpactFeedbackGenerator(style: .soft).impactOccurred()
+        }
+    }
+
+    func answerSide(colorPair: (Color, Color)) -> some View {
+        RoundedRectangle(cornerRadius: 28)
+            .fill(
+                LinearGradient(
+                    colors: [colorPair.0, colorPair.1],
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
+                )
+            )
+            .shadow(color: colorPair.0.opacity(0.3), radius: 20, y: 10)
+            .overlay(
+                VStack(spacing: 12) {
+                    Text("ANSWER")
+                        .font(.caption.bold())
+                        .tracking(2)
+                        .foregroundStyle(.white.opacity(0.5))
+                    Text(card.answer)
+                        .font(.system(size: 28, weight: .bold, design: .rounded))
+                        .multilineTextAlignment(.center)
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 28)
+                }
+            )
+            .rotation3DEffect(.degrees(isFlipped ? 0 : -180), axis: (x: 0, y: 1, z: 0))
+            .opacity(isFlipped ? 1 : 0)
+    }
+
+    var questionSide: some View {
+        RoundedRectangle(cornerRadius: 28)
+            .fill(.white)
+            .shadow(color: CuteTheme.pink.opacity(0.18), radius: 20, y: 10)
+            .overlay(
+                VStack(spacing: 12) {
+                    Text("QUESTION")
+                        .font(.caption.bold())
+                        .tracking(2)
+                        .foregroundStyle(.secondary.opacity(0.5))
+                    Text(card.question)
+                        .font(.system(size: 24, weight: .bold, design: .rounded))
+                        .multilineTextAlignment(.center)
+                        .foregroundStyle(.primary)
+                        .padding(.horizontal, 28)
+                }
+            )
+            .rotation3DEffect(.degrees(isFlipped ? 180 : 0), axis: (x: 0, y: 1, z: 0))
+            .opacity(isFlipped ? 0 : 1)
+    }
+}
+
+// MARK: - Action Button
+
+struct ActionButton: View {
+    let icon: String
+    let label: String
+    let color: Color
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 6) {
+                Image(systemName: icon)
+                    .font(.system(size: 14, weight: .semibold))
+                Text(label)
+                    .font(.subheadline.bold())
+            }
+            .foregroundStyle(color)
+            .frame(maxWidth: .infinity)
+            .padding(.vertical, 14)
+            .background(color.opacity(0.12), in: RoundedRectangle(cornerRadius: 14))
+        }
+    }
+}
+
+// MARK: - Dot Indicators
+
+struct DotIndicators: View {
+    let total: Int
+    let current: Int
+
+    var body: some View {
+        HStack(spacing: 6) {
+            let maxDots = 7
+
+            if total <= maxDots {
+                ForEach(0..<total, id: \.self) { i in
+                    dot(active: i == current)
+                }
+            } else {
+                let start = max(0, min(current - 3, total - maxDots))
+                let end = min(start + maxDots, total)
+
+                if start > 0 {
+                    Circle().fill(CuteTheme.pink.opacity(0.2)).frame(width: 4, height: 4)
+                }
+
+                ForEach(start..<end, id: \.self) { i in
+                    dot(active: i == current)
+                }
+
+                if end < total {
+                    Circle().fill(CuteTheme.pink.opacity(0.2)).frame(width: 4, height: 4)
+                }
+            }
+        }
+        .animation(.spring(response: 0.3), value: current)
+    }
+
+    func dot(active: Bool) -> some View {
+        Circle()
+            .fill(active ? Color(red: 0.82, green: 0.50, blue: 0.62) : CuteTheme.pink.opacity(0.4))
+            .frame(width: active ? 10 : 7, height: active ? 10 : 7)
+    }
+}
+
 // MARK: - Content View
 
 struct ContentView: View {
@@ -79,133 +504,120 @@ struct ContentView: View {
     @State private var showingDeleteAlert: Bool = false
     @State private var showingListView: Bool = false
     @State private var dragOffset: CGFloat = 0
-    @State private var cardTransition: Edge = .trailing
+    @State private var showEncouragement: Bool = false
+    @State private var encouragementText: String = ""
 
     var body: some View {
         NavigationStack {
             ZStack {
-                // Background gradient
+                // Background gradient only
                 LinearGradient(
                     colors: [
-                        Color(red: 0.93, green: 0.89, blue: 1.0),
-                        Color(red: 0.85, green: 0.82, blue: 0.97)
+                        CuteTheme.softPink,
+                        CuteTheme.cream,
+                        CuteTheme.sky.opacity(0.3)
                     ],
-                    startPoint: .top,
-                    endPoint: .bottom
+                    startPoint: .topLeading,
+                    endPoint: .bottomTrailing
                 )
                 .ignoresSafeArea()
 
+                // Emojis and words float above background but behind cards
+                FloatingEmojisView()
+                    .ignoresSafeArea()
+                FloatingWordsView()
+                    .ignoresSafeArea()
+
                 if store.cards.isEmpty {
-                    emptyView
+                    EmptyStateView { showingAddSheet = true }
                 } else {
                     cardBrowser
                 }
+
+                encouragementOverlay
             }
-            .navigationTitle("Flashcards")
-            .toolbar {
-                ToolbarItemGroup(placement: .topBarTrailing) {
-                    if !store.cards.isEmpty {
-                        Button {
-                            showingListView = true
-                        } label: {
-                            Image(systemName: "list.bullet.rectangle")
-                        }
-                    }
-                    Button {
-                        showingAddSheet = true
-                    } label: {
-                        Image(systemName: "plus.circle.fill")
-                            .font(.title3)
-                    }
-                }
-                ToolbarItem(placement: .topBarLeading) {
-                    if !store.cards.isEmpty {
-                        Text("\(currentIndex + 1) / \(store.cards.count)")
-                            .font(.subheadline.bold())
-                            .monospacedDigit()
-                            .foregroundStyle(.secondary)
-                    }
-                }
-            }
-            .sheet(isPresented: $showingAddSheet) {
-                CardFormView(mode: .add) { question, answer in
-                    store.add(Flashcard(question: question, answer: answer))
-                    currentIndex = store.cards.count - 1
-                    isFlipped = false
-                    haptic(.success)
-                }
-            }
-            .sheet(isPresented: $showingEditSheet) {
-                if store.cards.indices.contains(currentIndex) {
-                    let card = store.cards[currentIndex]
-                    CardFormView(mode: .edit, initialQuestion: card.question, initialAnswer: card.answer) { question, answer in
-                        var updated = card
-                        updated.question = question
-                        updated.answer = answer
-                        store.update(updated)
-                        isFlipped = false
-                        haptic(.success)
-                    }
-                }
-            }
+            .navigationTitle("🌸 Flashcards")
+            .toolbar { toolbarItems }
+            .sheet(isPresented: $showingAddSheet) { addSheet }
+            .sheet(isPresented: $showingEditSheet) { editSheet }
             .sheet(isPresented: $showingListView) {
                 CardListView(currentIndex: $currentIndex, isFlipped: $isFlipped)
             }
-            .alert("Delete Card", isPresented: $showingDeleteAlert) {
+            .alert("Remove this card? 🥺", isPresented: $showingDeleteAlert) {
                 Button("Delete", role: .destructive) { deleteCurrentCard() }
-                Button("Cancel", role: .cancel) { }
+                Button("Nevermind! 💕", role: .cancel) { }
             } message: {
-                Text("Are you sure you want to delete this card?")
+                Text("This card will be gone forever...")
             }
         }
     }
 
-    // MARK: - Empty State
+    // MARK: - Encouragement Overlay
 
-    var emptyView: some View {
-        VStack(spacing: 20) {
-            ZStack {
-                RoundedRectangle(cornerRadius: 20)
-                    .fill(.white.opacity(0.5))
-                    .frame(width: 100, height: 70)
-                    .rotationEffect(.degrees(-8))
-                RoundedRectangle(cornerRadius: 20)
-                    .fill(.white.opacity(0.7))
-                    .frame(width: 100, height: 70)
-                    .rotationEffect(.degrees(4))
-                RoundedRectangle(cornerRadius: 20)
-                    .fill(.white)
-                    .frame(width: 100, height: 70)
-                    .shadow(color: .black.opacity(0.05), radius: 5, y: 3)
+    var encouragementOverlay: some View {
+        Group {
+            if showEncouragement {
+                Text(encouragementText)
+                    .font(.title3.bold())
+                    .padding(.horizontal, 20)
+                    .padding(.vertical, 12)
+                    .background(.ultraThinMaterial, in: Capsule())
+                    .transition(.move(edge: .top).combined(with: .opacity))
+                    .frame(maxHeight: .infinity, alignment: .top)
+                    .padding(.top, 60)
             }
+        }
+    }
 
-            Text("No flashcards yet")
-                .font(.title2.bold())
-                .foregroundStyle(.primary.opacity(0.7))
+    // MARK: - Toolbar
 
-            Text("Create your first card to get started")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-
-            Button {
-                showingAddSheet = true
-            } label: {
-                Label("Create Card", systemImage: "plus")
-                    .font(.headline)
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 28)
-                    .padding(.vertical, 14)
-                    .background(
-                        LinearGradient(
-                            colors: [Color(red: 0.55, green: 0.4, blue: 0.95),
-                                     Color(red: 0.4, green: 0.3, blue: 0.85)],
-                            startPoint: .leading,
-                            endPoint: .trailing
-                        ),
-                        in: Capsule()
-                    )
+    @ToolbarContentBuilder
+    var toolbarItems: some ToolbarContent {
+        ToolbarItemGroup(placement: .topBarTrailing) {
+            if !store.cards.isEmpty {
+                Button { showingListView = true } label: {
+                    Image(systemName: "list.bullet.rectangle")
+                }
             }
-            .padding(.top, 8)
+            Button { showingAddSheet = true } label: {
+                Image(systemName: "plus.circle.fill").font(.title3)
+            }
+            .tint(Color(red: 0.85, green: 0.50, blue: 0.60))
+        }
+        ToolbarItem(placement: .topBarLeading) {
+            if !store.cards.isEmpty {
+                Text("\(currentIndex + 1)/\(store.cards.count)")
+                    .font(.subheadline.bold())
+                    .monospacedDigit()
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    // MARK: - Sheets
+
+    var addSheet: some View {
+        CardFormView(mode: .add) { question, answer in
+            store.add(Flashcard(question: question, answer: answer))
+            currentIndex = store.cards.count - 1
+            isFlipped = false
+            showEncouragementPopup()
+            UINotificationFeedbackGenerator().notificationOccurred(.success)
+        }
+    }
+
+    @ViewBuilder
+    var editSheet: some View {
+        if store.cards.indices.contains(currentIndex) {
+            let card = store.cards[currentIndex]
+            CardFormView(mode: .edit, initialQuestion: card.question, initialAnswer: card.answer) { question, answer in
+                var updated = card
+                updated.question = question
+                updated.answer = answer
+                store.update(updated)
+                isFlipped = false
+                UINotificationFeedbackGenerator().notificationOccurred(.success)
+            }
         }
     }
 
@@ -215,63 +627,35 @@ struct ContentView: View {
         VStack(spacing: 24) {
             Spacer()
 
-            // Card with swipe gesture
-            cardView(for: store.cards[currentIndex])
-                .offset(x: dragOffset)
-                .gesture(
-                    DragGesture()
-                        .onChanged { value in
-                            dragOffset = value.translation.width
-                        }
-                        .onEnded { value in
-                            let threshold: CGFloat = 60
-                            if value.translation.width < -threshold && currentIndex < store.cards.count - 1 {
-                                withAnimation(.spring(response: 0.35)) {
-                                    dragOffset = 0
-                                    isFlipped = false
-                                    currentIndex += 1
-                                }
-                                haptic(.light)
-                            } else if value.translation.width > threshold && currentIndex > 0 {
-                                withAnimation(.spring(response: 0.35)) {
-                                    dragOffset = 0
-                                    isFlipped = false
-                                    currentIndex -= 1
-                                }
-                                haptic(.light)
-                            } else {
-                                withAnimation(.spring(response: 0.3)) {
-                                    dragOffset = 0
-                                }
-                            }
-                        }
-                )
+            FlashcardView(
+                card: store.cards[currentIndex],
+                cardIndex: currentIndex,
+                isFlipped: $isFlipped
+            )
+            .offset(x: dragOffset)
+            .gesture(swipeGesture)
 
-            // Dot indicators (show up to 7)
             if store.cards.count > 1 {
-                dotIndicators
+                DotIndicators(total: store.cards.count, current: currentIndex)
             }
 
-            // Actions
-            HStack(spacing: 16) {
-                actionButton(icon: "shuffle", label: "Shuffle", color: .purple) {
+            HStack(spacing: 12) {
+                ActionButton(icon: "shuffle", label: "Shuffle", color: Color(red: 0.55, green: 0.45, blue: 0.70)) {
                     store.shuffle()
                     currentIndex = 0
                     isFlipped = false
-                    haptic(.medium)
+                    UIImpactFeedbackGenerator(style: .medium).impactOccurred()
                 }
-
-                actionButton(icon: "pencil", label: "Edit", color: .blue) {
+                ActionButton(icon: "pencil", label: "Edit", color: Color(red: 0.35, green: 0.55, blue: 0.75)) {
                     showingEditSheet = true
                 }
-
-                actionButton(icon: "trash", label: "Delete", color: .red) {
+                ActionButton(icon: "trash", label: "Delete", color: Color(red: 0.80, green: 0.35, blue: 0.35)) {
                     showingDeleteAlert = true
                 }
             }
             .padding(.horizontal)
 
-            Text("Swipe or tap to flip")
+            Text("Swipe to browse · Tap to flip ✨")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .padding(.bottom, 4)
@@ -280,117 +664,35 @@ struct ContentView: View {
         }
     }
 
-    // MARK: - Dot Indicators
+    // MARK: - Swipe Gesture
 
-    var dotIndicators: some View {
-        HStack(spacing: 6) {
-            let totalCards = store.cards.count
-            let maxDots = 7
-
-            if totalCards <= maxDots {
-                ForEach(0..<totalCards, id: \.self) { i in
-                    Circle()
-                        .fill(i == currentIndex ? Color(red: 0.5, green: 0.35, blue: 0.9) : Color.gray.opacity(0.3))
-                        .frame(width: i == currentIndex ? 10 : 7, height: i == currentIndex ? 10 : 7)
-                        .animation(.spring(response: 0.3), value: currentIndex)
-                }
-            } else {
-                // Show sliding window of dots
-                let start = max(0, min(currentIndex - 3, totalCards - maxDots))
-                let end = min(start + maxDots, totalCards)
-
-                if start > 0 {
-                    Circle().fill(Color.gray.opacity(0.2)).frame(width: 4, height: 4)
-                }
-
-                ForEach(start..<end, id: \.self) { i in
-                    Circle()
-                        .fill(i == currentIndex ? Color(red: 0.5, green: 0.35, blue: 0.9) : Color.gray.opacity(0.3))
-                        .frame(width: i == currentIndex ? 10 : 7, height: i == currentIndex ? 10 : 7)
-                        .animation(.spring(response: 0.3), value: currentIndex)
-                }
-
-                if end < totalCards {
-                    Circle().fill(Color.gray.opacity(0.2)).frame(width: 4, height: 4)
-                }
+    var swipeGesture: some Gesture {
+        DragGesture()
+            .onChanged { value in
+                dragOffset = value.translation.width
             }
-        }
-    }
-
-    // MARK: - Action Button
-
-    func actionButton(icon: String, label: String, color: Color, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            VStack(spacing: 6) {
-                Image(systemName: icon)
-                    .font(.system(size: 18, weight: .semibold))
-                Text(label)
-                    .font(.caption2.bold())
-            }
-            .foregroundStyle(color)
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 14)
-            .background(color.opacity(0.1), in: RoundedRectangle(cornerRadius: 14))
-        }
-    }
-
-    // MARK: - Card View
-
-    func cardView(for card: Flashcard) -> some View {
-        ZStack {
-            // Back (answer)
-            RoundedRectangle(cornerRadius: 28)
-                .fill(
-                    LinearGradient(
-                        colors: [Color(red: 0.55, green: 0.4, blue: 0.95),
-                                 Color(red: 0.4, green: 0.3, blue: 0.85)],
-                        startPoint: .topLeading,
-                        endPoint: .bottomTrailing
-                    )
-                )
-                .shadow(color: Color(red: 0.5, green: 0.35, blue: 0.9).opacity(0.35), radius: 24, y: 12)
-                .overlay(
-                    VStack(spacing: 16) {
-                        Image(systemName: "lightbulb.fill")
-                            .font(.title2)
-                            .foregroundStyle(.white.opacity(0.4))
-                        Text(card.answer)
-                            .font(.system(size: 30, weight: .bold, design: .rounded))
-                            .multilineTextAlignment(.center)
-                            .foregroundStyle(.white)
-                            .padding(.horizontal, 28)
+            .onEnded { value in
+                let threshold: CGFloat = 60
+                if value.translation.width < -threshold && currentIndex < store.cards.count - 1 {
+                    withAnimation(.spring(response: 0.35)) {
+                        dragOffset = 0
+                        isFlipped = false
+                        currentIndex += 1
                     }
-                )
-                .rotation3DEffect(.degrees(isFlipped ? 0 : -180), axis: (x: 0, y: 1, z: 0))
-                .opacity(isFlipped ? 1 : 0)
-
-            // Front (question)
-            RoundedRectangle(cornerRadius: 28)
-                .fill(.white)
-                .shadow(color: .black.opacity(0.07), radius: 24, y: 12)
-                .overlay(
-                    VStack(spacing: 16) {
-                        Image(systemName: "questionmark.circle")
-                            .font(.title2)
-                            .foregroundStyle(.purple.opacity(0.3))
-                        Text(card.question)
-                            .font(.system(size: 24, weight: .bold, design: .rounded))
-                            .multilineTextAlignment(.center)
-                            .foregroundStyle(.primary)
-                            .padding(.horizontal, 28)
+                    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                } else if value.translation.width > threshold && currentIndex > 0 {
+                    withAnimation(.spring(response: 0.35)) {
+                        dragOffset = 0
+                        isFlipped = false
+                        currentIndex -= 1
                     }
-                )
-                .rotation3DEffect(.degrees(isFlipped ? 180 : 0), axis: (x: 0, y: 1, z: 0))
-                .opacity(isFlipped ? 0 : 1)
-        }
-        .frame(height: 360)
-        .padding(.horizontal, 20)
-        .onTapGesture {
-            withAnimation(.spring(response: 0.4, dampingFraction: 0.8)) {
-                isFlipped.toggle()
+                    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                } else {
+                    withAnimation(.spring(response: 0.3)) {
+                        dragOffset = 0
+                    }
+                }
             }
-            haptic(.soft)
-        }
     }
 
     // MARK: - Actions
@@ -403,17 +705,19 @@ struct ContentView: View {
         } else if currentIndex >= store.cards.count {
             currentIndex = store.cards.count - 1
         }
-        haptic(.rigid)
+        UIImpactFeedbackGenerator(style: .rigid).impactOccurred()
     }
 
-    // MARK: - Haptics
-
-    func haptic(_ style: UIImpactFeedbackGenerator.FeedbackStyle) {
-        UIImpactFeedbackGenerator(style: style).impactOccurred()
-    }
-
-    func haptic(_ type: UINotificationFeedbackGenerator.FeedbackType) {
-        UINotificationFeedbackGenerator().notificationOccurred(type)
+    func showEncouragementPopup() {
+        encouragementText = CuteTheme.randomEncouragement()
+        withAnimation(.spring(response: 0.4)) {
+            showEncouragement = true
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
+            withAnimation(.easeOut(duration: 0.3)) {
+                showEncouragement = false
+            }
+        }
     }
 }
 
@@ -434,32 +738,7 @@ struct CardListView: View {
                         isFlipped = false
                         dismiss()
                     } label: {
-                        HStack(spacing: 14) {
-                            Text("\(index + 1)")
-                                .font(.caption.bold())
-                                .foregroundStyle(.white)
-                                .frame(width: 28, height: 28)
-                                .background(Color(red: 0.5, green: 0.35, blue: 0.9), in: Circle())
-
-                            VStack(alignment: .leading, spacing: 4) {
-                                Text(card.question)
-                                    .font(.subheadline.bold())
-                                    .foregroundStyle(.primary)
-                                    .lineLimit(1)
-                                Text(card.answer)
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                                    .lineLimit(1)
-                            }
-
-                            Spacer()
-
-                            if index == currentIndex {
-                                Image(systemName: "checkmark.circle.fill")
-                                    .foregroundStyle(Color(red: 0.5, green: 0.35, blue: 0.9))
-                            }
-                        }
-                        .padding(.vertical, 4)
+                        cardRow(index: index, card: card)
                     }
                 }
                 .onDelete { offsets in
@@ -474,7 +753,7 @@ struct CardListView: View {
                     }
                 }
             }
-            .navigationTitle("All Cards")
+            .navigationTitle("✨ All Cards")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
@@ -485,6 +764,35 @@ struct CardListView: View {
                 }
             }
         }
+    }
+
+    func cardRow(index: Int, card: Flashcard) -> some View {
+        HStack(spacing: 14) {
+            Text("\(index + 1)")
+                .font(.caption.bold())
+                .foregroundStyle(.white)
+                .frame(width: 28, height: 28)
+                .background(Color(red: 0.82, green: 0.55, blue: 0.65), in: Circle())
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text(card.question)
+                    .font(.subheadline.bold())
+                    .foregroundStyle(.primary)
+                    .lineLimit(1)
+                Text(card.answer)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+
+            Spacer()
+
+            if index == currentIndex {
+                Image(systemName: "checkmark.circle.fill")
+                    .foregroundStyle(Color(red: 0.82, green: 0.55, blue: 0.65))
+            }
+        }
+        .padding(.vertical, 4)
     }
 }
 
@@ -508,14 +816,6 @@ struct CardFormView: View {
         self.onSave = onSave
     }
 
-    var title: String {
-        mode == .add ? "New Card" : "Edit Card"
-    }
-
-    var buttonLabel: String {
-        mode == .add ? "Add" : "Save"
-    }
-
     var body: some View {
         NavigationStack {
             Form {
@@ -528,14 +828,14 @@ struct CardFormView: View {
                         .lineLimit(3...6)
                 }
             }
-            .navigationTitle(title)
+            .navigationTitle(mode == .add ? "New Card ✨" : "Edit Card")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
                     Button("Cancel") { dismiss() }
                 }
                 ToolbarItem(placement: .confirmationAction) {
-                    Button(buttonLabel) {
+                    Button(mode == .add ? "Add" : "Save") {
                         onSave(question.trimmingCharacters(in: .whitespaces),
                                answer.trimmingCharacters(in: .whitespaces))
                         dismiss()
