@@ -29,14 +29,24 @@ struct Deck: Identifiable, Codable {
 class DataStore: ObservableObject {
     @Published var decks: [Deck] = [] { didSet { save() } }
     @Published var appTitle: String = "🌸 Flashcards" { didSet { saveTitle() } }
+    @Published var activeDeckID: UUID? = nil { didSet { saveActiveDeck() } }
 
     private let decksKey = "saved_decks_v2"
     private let titleKey = "app_title"
+    private let activeDeckKey = "active_deck_id"
 
     init() {
         loadTitle()
         loadDecks()
         if decks.isEmpty { createSampleDeck() }
+        loadActiveDeck()
+        if activeDeckID == nil || !decks.contains(where: { $0.id == activeDeckID }) {
+            activeDeckID = decks.first?.id
+        }
+    }
+
+    var activeDeck: Deck? {
+        decks.first(where: { $0.id == activeDeckID })
     }
 
     func createSampleDeck() {
@@ -78,14 +88,39 @@ class DataStore: ObservableObject {
         }
     }
 
+    func saveActiveDeck() {
+        if let id = activeDeckID {
+            UserDefaults.standard.set(id.uuidString, forKey: activeDeckKey)
+        }
+    }
+
+    func loadActiveDeck() {
+        if let str = UserDefaults.standard.string(forKey: activeDeckKey),
+           let id = UUID(uuidString: str) {
+            activeDeckID = id
+        }
+    }
+
     // Deck operations
     func addDeck(_ name: String) {
-        decks.append(Deck(name: name))
+        let deck = Deck(name: name)
+        decks.append(deck)
+        activeDeckID = deck.id
     }
 
     func deleteDeck(at index: Int) {
         guard decks.indices.contains(index) else { return }
+        let wasActive = decks[index].id == activeDeckID
         decks.remove(at: index)
+        if wasActive {
+            activeDeckID = decks.first?.id
+        }
+    }
+
+    func deleteDeck(id: UUID) {
+        if let i = decks.firstIndex(where: { $0.id == id }) {
+            deleteDeck(at: i)
+        }
     }
 
     func renameDeck(id: UUID, to name: String) {
@@ -158,7 +193,7 @@ struct FlashcardApp: App {
 
     var body: some Scene {
         WindowGroup {
-            HomeView()
+            MainView()
                 .environmentObject(store)
         }
     }
@@ -179,35 +214,96 @@ struct AppBackgroundLayer: View {
 }
 
 // ============================================================
-// MARK: - Home View (Deck List)
+// MARK: - Main View
 // ============================================================
 
-struct HomeView: View {
+struct MainView: View {
     @EnvironmentObject var store: DataStore
-    @State private var showNewDeck = false
-    @State private var newDeckName = ""
+    @State private var currentIndex: Int = 0
+    @State private var isFlipped: Bool = false
+    @State private var showAddCard = false
+    @State private var showEditCard = false
+    @State private var showDeleteAlert = false
+    @State private var showCardList = false
+    @State private var showRenameDeck = false
     @State private var showRenameTitle = false
-    @State private var newTitle = ""
+    @State private var showNewDeck = false
+    @State private var showExport = false
     @State private var showSearch = false
+    @State private var showManageDecks = false
+    @State private var newDeckName = ""
+    @State private var newTitle = ""
+    @State private var dragOffset: CGFloat = 0
+    @State private var filterTags: Set<String> = []
+
+    var deckID: UUID? { store.activeDeckID }
+
+    var deck: Deck? { store.activeDeck }
+
+    var filteredCards: [Flashcard] {
+        guard let deck = deck else { return [] }
+        if filterTags.isEmpty { return deck.cards }
+        return deck.cards.filter { card in
+            !filterTags.isDisjoint(with: card.tags)
+        }
+    }
+
+    var deckTags: [String] {
+        guard let deck = deck else { return [] }
+        return Array(Set(deck.cards.flatMap { $0.tags })).sorted()
+    }
+
+    var safeIndex: Int {
+        guard !filteredCards.isEmpty else { return 0 }
+        return min(currentIndex, filteredCards.count - 1)
+    }
 
     var body: some View {
         NavigationStack {
             ZStack {
                 AppBackgroundLayer()
-                homeContent
+
+                if store.decks.isEmpty {
+                    noDecksView
+                } else if filteredCards.isEmpty {
+                    deckEmptyView
+                } else {
+                    cardBrowser
+                }
             }
-            .navigationTitle(store.appTitle)
-            .toolbar { homeToolbar }
-            .alert("New Deck", isPresented: $showNewDeck) {
+            .navigationTitle(deck?.name ?? store.appTitle)
+            .navigationBarTitleDisplayMode(.large)
+            .toolbar { mainToolbar }
+            .sheet(isPresented: $showAddCard) { addCardSheet }
+            .sheet(isPresented: $showEditCard) { editCardSheet }
+            .sheet(isPresented: $showSearch) { SearchView() }
+            .sheet(isPresented: $showManageDecks) { ManageDecksView() }
+            .sheet(isPresented: $showCardList) {
+                if let did = deckID {
+                    CardListView(deckID: did, currentIndex: $currentIndex, isFlipped: $isFlipped)
+                }
+            }
+            .sheet(isPresented: $showExport) {
+                if let did = deckID {
+                    ExportView(deckID: did)
+                }
+            }
+            .alert("Delete card? 🥺", isPresented: $showDeleteAlert) {
+                Button("Delete", role: .destructive) { deleteCurrentCard() }
+                Button("Nevermind! 💕", role: .cancel) { }
+            } message: {
+                Text("This card will be gone forever...")
+            }
+            .alert("Rename Deck", isPresented: $showRenameDeck) {
                 TextField("Deck name", text: $newDeckName)
-                Button("Create") {
-                    let name = newDeckName.trimmingCharacters(in: .whitespaces)
-                    if !name.isEmpty { store.addDeck(name) }
+                Button("Save") {
+                    let n = newDeckName.trimmingCharacters(in: .whitespaces)
+                    if !n.isEmpty, let did = deckID { store.renameDeck(id: did, to: n) }
                     newDeckName = ""
                 }
                 Button("Cancel", role: .cancel) { newDeckName = "" }
             }
-            .alert("Rename App", isPresented: $showRenameTitle) {
+            .alert("Rename App Title", isPresented: $showRenameTitle) {
                 TextField("New title", text: $newTitle)
                 Button("Save") {
                     let t = newTitle.trimmingCharacters(in: .whitespaces)
@@ -216,64 +312,35 @@ struct HomeView: View {
                 }
                 Button("Cancel", role: .cancel) { newTitle = "" }
             }
-            .sheet(isPresented: $showSearch) {
-                SearchView()
-            }
-        }
-    }
-
-    var homeContent: some View {
-        Group {
-            if store.decks.isEmpty {
-                HomeEmptyView { showNewDeck = true }
-            } else {
-                deckList
-            }
-        }
-    }
-
-    var deckList: some View {
-        ScrollView {
-            LazyVStack(spacing: 14) {
-                ForEach(Array(store.decks.enumerated()), id: \.element.id) { index, deck in
-                    NavigationLink(destination: DeckView(deckID: deck.id)) {
-                        DeckRowView(deck: deck)
-                    }
-                    .contextMenu {
-                        Button("Delete", role: .destructive) {
-                            store.deleteDeck(at: index)
-                        }
-                    }
+            .alert("New Deck", isPresented: $showNewDeck) {
+                TextField("Deck name", text: $newDeckName)
+                Button("Create") {
+                    let name = newDeckName.trimmingCharacters(in: .whitespaces)
+                    if !name.isEmpty { store.addDeck(name) }
+                    newDeckName = ""
+                    resetCardState()
                 }
+                Button("Cancel", role: .cancel) { newDeckName = "" }
             }
-            .padding(.horizontal)
-            .padding(.top, 10)
-        }
-    }
-
-    @ToolbarContentBuilder
-    var homeToolbar: some ToolbarContent {
-        ToolbarItemGroup(placement: .topBarTrailing) {
-            Button { showSearch = true } label: {
-                Image(systemName: "magnifyingglass")
+            .onChange(of: filterTags) { _ in
+                currentIndex = 0; isFlipped = false
             }
-            Button { showNewDeck = true } label: {
-                Image(systemName: "plus.circle.fill").font(.title3)
-            }
-            .tint(CuteTheme.accent)
-        }
-        ToolbarItem(placement: .topBarLeading) {
-            Button { newTitle = store.appTitle; showRenameTitle = true } label: {
-                Image(systemName: "pencil.circle")
+            .onChange(of: store.activeDeckID) { _ in
+                resetCardState()
             }
         }
     }
-}
 
-struct HomeEmptyView: View {
-    let onAdd: () -> Void
+    func resetCardState() {
+        currentIndex = 0
+        isFlipped = false
+        filterTags.removeAll()
+        dragOffset = 0
+    }
 
-    var body: some View {
+    // MARK: - No Decks
+
+    var noDecksView: some View {
         VStack(spacing: 20) {
             HStack(spacing: -8) {
                 Text("🐮").font(.system(size: 44)).rotationEffect(.degrees(-10))
@@ -281,12 +348,10 @@ struct HomeEmptyView: View {
                 Text("🐼").font(.system(size: 44)).rotationEffect(.degrees(10))
             }
             Text("No decks yet!")
-                .font(.title2.bold())
-                .foregroundStyle(.primary.opacity(0.7))
+                .font(.title2.bold()).foregroundStyle(.primary.opacity(0.7))
             Text("Create a deck to start adding flashcards ✨")
-                .font(.subheadline)
-                .foregroundStyle(.secondary)
-            Button(action: onAdd) {
+                .font(.subheadline).foregroundStyle(.secondary)
+            Button { showNewDeck = true } label: {
                 HStack(spacing: 8) {
                     Text("✨")
                     Text("Create First Deck").font(.headline)
@@ -303,124 +368,19 @@ struct HomeEmptyView: View {
             }
         }
     }
-}
 
-struct DeckRowView: View {
-    let deck: Deck
-
-    var body: some View {
-        HStack(spacing: 14) {
-            Text("📚")
-                .font(.title)
-                .frame(width: 50, height: 50)
-                .background(CuteTheme.pink.opacity(0.2), in: RoundedRectangle(cornerRadius: 14))
-
-            VStack(alignment: .leading, spacing: 4) {
-                Text(deck.name)
-                    .font(.headline)
-                    .foregroundStyle(.primary)
-                Text("\(deck.cards.count) card\(deck.cards.count == 1 ? "" : "s")")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-            Spacer()
-            Image(systemName: "chevron.right")
-                .font(.caption.bold())
-                .foregroundStyle(.tertiary)
-        }
-        .padding(16)
-        .background(.white, in: RoundedRectangle(cornerRadius: 18))
-        .shadow(color: CuteTheme.pink.opacity(0.12), radius: 8, y: 4)
-    }
-}
-
-// ============================================================
-// MARK: - Deck View (Card Browser)
-// ============================================================
-
-struct DeckView: View {
-    @EnvironmentObject var store: DataStore
-    let deckID: UUID
-    @State private var currentIndex: Int = 0
-    @State private var isFlipped: Bool = false
-    @State private var showAddCard = false
-    @State private var showEditCard = false
-    @State private var showDeleteAlert = false
-    @State private var showCardList = false
-    @State private var showRenameDeck = false
-    @State private var showExport = false
-    @State private var newDeckName = ""
-    @State private var dragOffset: CGFloat = 0
-    @State private var filterTag: String? = nil
-
-    var deck: Deck? { store.decks.first(where: { $0.id == deckID }) }
-
-    var filteredCards: [Flashcard] {
-        guard let deck = deck else { return [] }
-        if let tag = filterTag {
-            return deck.cards.filter { $0.tags.contains(tag) }
-        }
-        return deck.cards
-    }
-
-    var deckTags: [String] {
-        guard let deck = deck else { return [] }
-        return Array(Set(deck.cards.flatMap { $0.tags })).sorted()
-    }
-
-    var body: some View {
-        ZStack {
-            AppBackgroundLayer()
-
-            if filteredCards.isEmpty {
-                deckEmptyView
-            } else {
-                cardBrowser
-            }
-        }
-        .navigationTitle(deck?.name ?? "Deck")
-        .navigationBarTitleDisplayMode(.large)
-        .toolbar { deckToolbar }
-        .sheet(isPresented: $showAddCard) { addCardSheet }
-        .sheet(isPresented: $showEditCard) { editCardSheet }
-        .sheet(isPresented: $showCardList) {
-            CardListView(deckID: deckID, currentIndex: $currentIndex, isFlipped: $isFlipped)
-        }
-        .sheet(isPresented: $showExport) { ExportView(deckID: deckID) }
-        .alert("Delete card? 🥺", isPresented: $showDeleteAlert) {
-            Button("Delete", role: .destructive) { deleteCurrentCard() }
-            Button("Nevermind! 💕", role: .cancel) { }
-        } message: {
-            Text("This card will be gone forever...")
-        }
-        .alert("Rename Deck", isPresented: $showRenameDeck) {
-            TextField("Deck name", text: $newDeckName)
-            Button("Save") {
-                let n = newDeckName.trimmingCharacters(in: .whitespaces)
-                if !n.isEmpty { store.renameDeck(id: deckID, to: n) }
-                newDeckName = ""
-            }
-            Button("Cancel", role: .cancel) { newDeckName = "" }
-        }
-        .onChange(of: filterTag) { _ in
-            currentIndex = 0
-            isFlipped = false
-        }
-    }
-
-    // MARK: - Empty
+    // MARK: - Empty Deck
 
     var deckEmptyView: some View {
         VStack(spacing: 16) {
-            if filterTag != nil {
-                Text("No cards with this tag")
+            if !filterTags.isEmpty {
+                Text("No cards with selected tags")
                     .font(.title3.bold()).foregroundStyle(.secondary)
-                Button("Clear Filter") { filterTag = nil }
+                Button("Clear Filter") { filterTags.removeAll() }
                     .buttonStyle(.borderedProminent)
                     .tint(CuteTheme.accent)
             } else {
-                Text("🐣")
-                    .font(.system(size: 60))
+                Text("🐣").font(.system(size: 60))
                 Text("No cards in this deck yet")
                     .font(.title3.bold()).foregroundStyle(.secondary)
                 Button("Add First Card") { showAddCard = true }
@@ -434,7 +394,6 @@ struct DeckView: View {
 
     var cardBrowser: some View {
         VStack(spacing: 20) {
-            // Tag filter bar
             if !deckTags.isEmpty {
                 tagFilterBar
             }
@@ -442,8 +401,8 @@ struct DeckView: View {
             Spacer()
 
             FlashcardView(
-                card: filteredCards[currentIndex],
-                cardIndex: currentIndex,
+                card: filteredCards[safeIndex],
+                cardIndex: safeIndex,
                 isFlipped: $isFlipped
             )
             .offset(x: dragOffset)
@@ -453,9 +412,11 @@ struct DeckView: View {
                     Label("Edit", systemImage: "pencil")
                 }
                 Button {
-                    store.shuffleDeck(deckID)
-                    currentIndex = 0; isFlipped = false
-                    UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                    if let did = deckID {
+                        store.shuffleDeck(did)
+                        currentIndex = 0; isFlipped = false
+                        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                    }
                 } label: {
                     Label("Shuffle", systemImage: "shuffle")
                 }
@@ -465,7 +426,7 @@ struct DeckView: View {
             }
 
             if filteredCards.count > 1 {
-                DotIndicators(total: filteredCards.count, current: currentIndex)
+                DotIndicators(total: filteredCards.count, current: safeIndex)
             }
 
             Text("Swipe to browse · Tap to flip · Hold for options")
@@ -473,17 +434,26 @@ struct DeckView: View {
 
             Spacer()
         }
+        .onAppear {
+            if currentIndex >= filteredCards.count {
+                currentIndex = max(filteredCards.count - 1, 0)
+            }
+        }
     }
 
     var tagFilterBar: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 8) {
-                TagChip(label: "All", isSelected: filterTag == nil) {
-                    filterTag = nil
+                TagChip(label: "All", isSelected: filterTags.isEmpty) {
+                    filterTags.removeAll()
                 }
                 ForEach(deckTags, id: \.self) { tag in
-                    TagChip(label: tag, isSelected: filterTag == tag) {
-                        filterTag = (filterTag == tag) ? nil : tag
+                    TagChip(label: tag, isSelected: filterTags.contains(tag)) {
+                        if filterTags.contains(tag) {
+                            filterTags.remove(tag)
+                        } else {
+                            filterTags.insert(tag)
+                        }
                     }
                 }
             }
@@ -494,25 +464,71 @@ struct DeckView: View {
     // MARK: - Toolbar
 
     @ToolbarContentBuilder
-    var deckToolbar: some ToolbarContent {
-        ToolbarItemGroup(placement: .topBarTrailing) {
+    var mainToolbar: some ToolbarContent {
+        ToolbarItem(placement: .topBarLeading) {
+            // Deck switcher
             Menu {
-                Button { showCardList = true } label: {
-                    Label("All Cards", systemImage: "list.bullet.rectangle")
+                // Switch deck
+                Section("Switch Deck") {
+                    ForEach(store.decks) { d in
+                        Button {
+                            store.activeDeckID = d.id
+                        } label: {
+                            HStack {
+                                Text(d.name)
+                                if d.id == deckID {
+                                    Image(systemName: "checkmark")
+                                }
+                            }
+                        }
+                    }
                 }
-                Button { newDeckName = deck?.name ?? ""; showRenameDeck = true } label: {
-                    Label("Rename Deck", systemImage: "pencil")
+                Divider()
+                Button { showNewDeck = true } label: {
+                    Label("New Deck", systemImage: "plus")
                 }
-                Button { showExport = true } label: {
-                    Label("Export", systemImage: "square.and.arrow.up")
+                Button { showManageDecks = true } label: {
+                    Label("Manage Decks", systemImage: "folder")
+                }
+                Divider()
+                Button { newTitle = store.appTitle; showRenameTitle = true } label: {
+                    Label("Rename App Title", systemImage: "textformat")
                 }
             } label: {
-                Image(systemName: "ellipsis.circle")
+                HStack(spacing: 4) {
+                    Image(systemName: "rectangle.stack")
+                    if store.decks.count > 1 {
+                        Image(systemName: "chevron.down")
+                            .font(.system(size: 10, weight: .bold))
+                    }
+                }
+            }
+        }
+
+        ToolbarItemGroup(placement: .topBarTrailing) {
+            Button { showSearch = true } label: {
+                Image(systemName: "magnifyingglass")
+            }
+            if deck != nil {
+                Menu {
+                    Button { showCardList = true } label: {
+                        Label("All Cards", systemImage: "list.bullet.rectangle")
+                    }
+                    Button { newDeckName = deck?.name ?? ""; showRenameDeck = true } label: {
+                        Label("Rename Deck", systemImage: "pencil")
+                    }
+                    Button { showExport = true } label: {
+                        Label("Export", systemImage: "square.and.arrow.up")
+                    }
+                } label: {
+                    Image(systemName: "ellipsis.circle")
+                }
             }
             Button { showAddCard = true } label: {
                 Image(systemName: "plus.circle.fill").font(.title3)
             }
             .tint(CuteTheme.accent)
+            .disabled(deck == nil)
         }
     }
 
@@ -520,39 +536,44 @@ struct DeckView: View {
 
     var addCardSheet: some View {
         CardFormView(mode: .add, deckTags: deckTags) { card in
-            store.addCard(to: deckID, card: card)
-            currentIndex = max(filteredCards.count - 1, 0)
-            isFlipped = false
-            UINotificationFeedbackGenerator().notificationOccurred(.success)
-        }
-    }
-
-    @ViewBuilder
-    var editCardSheet: some View {
-        if filteredCards.indices.contains(currentIndex) {
-            CardFormView(mode: .edit, existingCard: filteredCards[currentIndex], deckTags: deckTags) { card in
-                store.updateCard(in: deckID, card: card)
+            if let did = deckID {
+                store.addCard(to: did, card: card)
+                currentIndex = max(filteredCards.count - 1, 0)
                 isFlipped = false
                 UINotificationFeedbackGenerator().notificationOccurred(.success)
             }
         }
     }
 
-    // MARK: - Swipe Gesture
+    @ViewBuilder
+    var editCardSheet: some View {
+        if filteredCards.indices.contains(safeIndex) {
+            CardFormView(mode: .edit, existingCard: filteredCards[safeIndex], deckTags: deckTags) { card in
+                if let did = deckID {
+                    store.updateCard(in: did, card: card)
+                    isFlipped = false
+                    UINotificationFeedbackGenerator().notificationOccurred(.success)
+                }
+            }
+        }
+    }
+
+    // MARK: - Gestures & Actions
 
     var swipeGesture: some Gesture {
         DragGesture()
             .onChanged { v in dragOffset = v.translation.width }
             .onEnded { v in
                 let threshold: CGFloat = 60
-                if v.translation.width < -threshold && currentIndex < filteredCards.count - 1 {
+                let maxIndex = filteredCards.count - 1
+                if v.translation.width < -threshold && safeIndex < maxIndex {
                     withAnimation(.spring(response: 0.35)) {
-                        dragOffset = 0; isFlipped = false; currentIndex += 1
+                        dragOffset = 0; isFlipped = false; currentIndex = safeIndex + 1
                     }
                     UIImpactFeedbackGenerator(style: .light).impactOccurred()
-                } else if v.translation.width > threshold && currentIndex > 0 {
+                } else if v.translation.width > threshold && safeIndex > 0 {
                     withAnimation(.spring(response: 0.35)) {
-                        dragOffset = 0; isFlipped = false; currentIndex -= 1
+                        dragOffset = 0; isFlipped = false; currentIndex = safeIndex - 1
                     }
                     UIImpactFeedbackGenerator(style: .light).impactOccurred()
                 } else {
@@ -562,16 +583,91 @@ struct DeckView: View {
     }
 
     func deleteCurrentCard() {
-        guard let deck = deck else { return }
-        let card = filteredCards[currentIndex]
+        guard let deck = deck, let did = deckID, filteredCards.indices.contains(safeIndex) else { return }
+        let card = filteredCards[safeIndex]
         if let realIndex = deck.cards.firstIndex(where: { $0.id == card.id }) {
-            store.deleteCard(in: deckID, at: realIndex)
+            store.deleteCard(in: did, at: realIndex)
         }
         isFlipped = false
         if currentIndex >= filteredCards.count && currentIndex > 0 {
             currentIndex = filteredCards.count - 1
         }
         UIImpactFeedbackGenerator(style: .rigid).impactOccurred()
+    }
+}
+
+// ============================================================
+// MARK: - Manage Decks Sheet
+// ============================================================
+
+struct ManageDecksView: View {
+    @EnvironmentObject var store: DataStore
+    @Environment(\.dismiss) var dismiss
+    @State private var showNewDeck = false
+    @State private var newDeckName = ""
+
+    var body: some View {
+        NavigationStack {
+            List {
+                ForEach(store.decks) { deck in
+                    HStack(spacing: 14) {
+                        Text("📚").font(.title2)
+                        VStack(alignment: .leading, spacing: 2) {
+                            HStack(spacing: 6) {
+                                Text(deck.name).font(.headline)
+                                if deck.id == store.activeDeckID {
+                                    Text("Active")
+                                        .font(.caption2.bold())
+                                        .foregroundStyle(.white)
+                                        .padding(.horizontal, 6).padding(.vertical, 2)
+                                        .background(CuteTheme.accent, in: Capsule())
+                                }
+                            }
+                            Text("\(deck.cards.count) card\(deck.cards.count == 1 ? "" : "s")")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        Button {
+                            store.activeDeckID = deck.id
+                            dismiss()
+                        } label: {
+                            Text("Switch")
+                                .font(.caption.bold())
+                                .foregroundStyle(deck.id == store.activeDeckID ? .secondary : CuteTheme.accent)
+                        }
+                        .disabled(deck.id == store.activeDeckID)
+                    }
+                    .padding(.vertical, 4)
+                }
+                .onDelete { offsets in
+                    for offset in offsets {
+                        store.deleteDeck(at: offset)
+                    }
+                }
+            }
+            .navigationTitle("Manage Decks")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button("Done") { dismiss() }
+                }
+                ToolbarItemGroup(placement: .topBarTrailing) {
+                    EditButton()
+                    Button { showNewDeck = true } label: {
+                        Image(systemName: "plus")
+                    }
+                }
+            }
+            .alert("New Deck", isPresented: $showNewDeck) {
+                TextField("Deck name", text: $newDeckName)
+                Button("Create") {
+                    let name = newDeckName.trimmingCharacters(in: .whitespaces)
+                    if !name.isEmpty { store.addDeck(name) }
+                    newDeckName = ""
+                }
+                Button("Cancel", role: .cancel) { newDeckName = "" }
+            }
+        }
     }
 }
 
@@ -1010,74 +1106,373 @@ struct CardListView: View {
 // MARK: - Search View
 // ============================================================
 
+enum TagMatchMode: String, CaseIterable {
+    case any = "Any tag"
+    case all = "All tags"
+}
+
+enum SortOption: String, CaseIterable {
+    case newest = "Newest"
+    case oldest = "Oldest"
+    case alphabetical = "A → Z"
+}
+
 struct SearchView: View {
     @EnvironmentObject var store: DataStore
     @Environment(\.dismiss) var dismiss
     @State private var query = ""
-    @State private var selectedTag: String? = nil
+    @State private var selectedTags: Set<String> = []
+    @State private var selectedDecks: Set<UUID> = []
+    @State private var tagMatchMode: TagMatchMode = .any
+    @State private var sortOption: SortOption = .newest
+    @State private var showFilters = false
+    @State private var viewingCard: SearchCardItem? = nil
+    @State private var editingCard: SearchEditItem? = nil
+    @State private var deletingCard: SearchEditItem? = nil
+    @State private var showDeleteAlert = false
+
+    var hasActiveFilters: Bool {
+        !selectedTags.isEmpty || !selectedDecks.isEmpty
+    }
 
     var results: [(Deck, Flashcard)] {
         var matches: [(Deck, Flashcard)] = []
         for deck in store.decks {
+            if !selectedDecks.isEmpty && !selectedDecks.contains(deck.id) {
+                continue
+            }
             for card in deck.cards {
                 let matchesQuery = query.isEmpty ||
                     card.question.localizedCaseInsensitiveContains(query) ||
                     card.answer.localizedCaseInsensitiveContains(query) ||
                     card.notes.localizedCaseInsensitiveContains(query) ||
                     card.tags.contains(where: { $0.localizedCaseInsensitiveContains(query) })
-                let matchesTag = selectedTag == nil || card.tags.contains(selectedTag!)
-                if matchesQuery && matchesTag {
+
+                let matchesTags: Bool
+                if selectedTags.isEmpty {
+                    matchesTags = true
+                } else if tagMatchMode == .any {
+                    matchesTags = !selectedTags.isDisjoint(with: card.tags)
+                } else {
+                    matchesTags = selectedTags.isSubset(of: Set(card.tags))
+                }
+
+                if matchesQuery && matchesTags {
                     matches.append((deck, card))
                 }
             }
         }
+
+        switch sortOption {
+        case .newest:
+            matches.sort { $0.1.createdAt > $1.1.createdAt }
+        case .oldest:
+            matches.sort { $0.1.createdAt < $1.1.createdAt }
+        case .alphabetical:
+            matches.sort { $0.1.question.localizedCaseInsensitiveCompare($1.1.question) == .orderedAscending }
+        }
+
         return matches
     }
 
     var body: some View {
         NavigationStack {
             VStack(spacing: 0) {
-                // Tag filter
-                if !store.allTags.isEmpty {
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        HStack(spacing: 8) {
-                            TagChip(label: "All", isSelected: selectedTag == nil) {
-                                selectedTag = nil
-                            }
-                            ForEach(store.allTags, id: \.self) { tag in
-                                TagChip(label: tag, isSelected: selectedTag == tag) {
-                                    selectedTag = (selectedTag == tag) ? nil : tag
-                                }
-                            }
-                        }
-                        .padding(.horizontal)
-                        .padding(.vertical, 8)
+                filterBar
+                if showFilters {
+                    filterPanel
+                }
+                resultsList
+            }
+            .searchable(text: $query, prompt: "Search questions, answers, notes, tags...")
+            .navigationTitle("🔍 Search")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar { searchToolbar }
+            .sheet(item: $viewingCard) { item in
+                CardPreviewSheet(deck: item.deck, card: item.card)
+            }
+            .sheet(item: $editingCard) { item in
+                let deckTags = Array(Set(store.decks.first(where: { $0.id == item.deckID })?.cards.flatMap { $0.tags } ?? [])).sorted()
+                CardFormView(mode: .edit, existingCard: item.card, deckTags: deckTags) { updated in
+                    store.updateCard(in: item.deckID, card: updated)
+                }
+            }
+            .alert("Delete card? 🥺", isPresented: $showDeleteAlert) {
+                Button("Delete", role: .destructive) {
+                    if let d = deletingCard, let deck = store.decks.first(where: { $0.id == d.deckID }),
+                       let idx = deck.cards.firstIndex(where: { $0.id == d.card.id }) {
+                        store.deleteCard(in: d.deckID, at: idx)
+                    }
+                    deletingCard = nil
+                }
+                Button("Nevermind! 💕", role: .cancel) { deletingCard = nil }
+            } message: {
+                Text("This card will be gone forever...")
+            }
+        }
+    }
+
+    // MARK: - Filter Bar
+
+    var filterBar: some View {
+        HStack(spacing: 10) {
+            Button {
+                withAnimation(.spring(response: 0.3)) { showFilters.toggle() }
+            } label: {
+                HStack(spacing: 5) {
+                    Image(systemName: "line.3.horizontal.decrease.circle\(showFilters ? ".fill" : "")")
+                    Text("Filters")
+                        .font(.subheadline.bold())
+                    if hasActiveFilters {
+                        Text("\(selectedTags.count + selectedDecks.count)")
+                            .font(.caption2.bold())
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 6).padding(.vertical, 2)
+                            .background(CuteTheme.accent, in: Capsule())
                     }
                 }
+                .foregroundStyle(hasActiveFilters ? CuteTheme.accent : .secondary)
+            }
 
-                List {
-                    ForEach(results, id: \.1.id) { deck, card in
-                        VStack(alignment: .leading, spacing: 6) {
-                            Text(card.question).font(.subheadline.bold())
-                            Text(card.answer).font(.caption).foregroundStyle(.secondary)
-                            HStack(spacing: 8) {
-                                Text(deck.name)
-                                    .font(.caption2).foregroundStyle(.white)
-                                    .padding(.horizontal, 8).padding(.vertical, 2)
-                                    .background(CuteTheme.accent.opacity(0.7), in: Capsule())
-                                ForEach(card.tags, id: \.self) { tag in
-                                    Text(tag).font(.caption2)
-                                        .padding(.horizontal, 6).padding(.vertical, 2)
-                                        .background(Color.gray.opacity(0.1), in: Capsule())
-                                }
+            Spacer()
+
+            Menu {
+                ForEach(SortOption.allCases, id: \.self) { option in
+                    Button {
+                        sortOption = option
+                    } label: {
+                        HStack {
+                            Text(option.rawValue)
+                            if sortOption == option {
+                                Image(systemName: "checkmark")
                             }
                         }
-                        .padding(.vertical, 4)
+                    }
+                }
+            } label: {
+                HStack(spacing: 4) {
+                    Image(systemName: "arrow.up.arrow.down")
+                    Text(sortOption.rawValue).font(.caption)
+                }
+                .foregroundStyle(.secondary)
+            }
+
+            Text("\(results.count) result\(results.count == 1 ? "" : "s")")
+                .font(.caption)
+                .foregroundStyle(.tertiary)
+        }
+        .padding(.horizontal).padding(.vertical, 10)
+    }
+
+    // MARK: - Filter Panel
+
+    var filterPanel: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            // Decks section — always visible
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Decks").font(.caption.bold()).foregroundStyle(.secondary)
+                FlowLayout(spacing: 6) {
+                    ForEach(store.decks) { deck in
+                        FilterChip(
+                            label: "\(deck.name) (\(deck.cards.count))",
+                            icon: "📚",
+                            isSelected: selectedDecks.contains(deck.id)
+                        ) {
+                            if selectedDecks.contains(deck.id) {
+                                selectedDecks.remove(deck.id)
+                            } else {
+                                selectedDecks.insert(deck.id)
+                            }
+                        }
                     }
                 }
             }
-            .searchable(text: $query, prompt: "Search cards...")
-            .navigationTitle("🔍 Search")
+
+            // Tags section
+            if !store.allTags.isEmpty {
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        Text("Tags").font(.caption.bold()).foregroundStyle(.secondary)
+                        Spacer()
+                        if selectedTags.count > 1 {
+                            Picker("", selection: $tagMatchMode) {
+                                ForEach(TagMatchMode.allCases, id: \.self) { mode in
+                                    Text(mode.rawValue).tag(mode)
+                                }
+                            }
+                            .pickerStyle(.segmented)
+                            .frame(width: 180)
+                        }
+                    }
+
+                    FlowLayout(spacing: 6) {
+                        ForEach(store.allTags, id: \.self) { tag in
+                            FilterChip(
+                                label: tag,
+                                icon: nil,
+                                isSelected: selectedTags.contains(tag)
+                            ) {
+                                if selectedTags.contains(tag) {
+                                    selectedTags.remove(tag)
+                                } else {
+                                    selectedTags.insert(tag)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            if hasActiveFilters {
+                Button {
+                    withAnimation {
+                        selectedTags.removeAll()
+                        selectedDecks.removeAll()
+                    }
+                } label: {
+                    HStack(spacing: 4) {
+                        Image(systemName: "xmark.circle.fill")
+                        Text("Clear all filters")
+                    }
+                    .font(.caption.bold())
+                    .foregroundStyle(.red.opacity(0.8))
+                }
+            }
+        }
+        .padding(.horizontal).padding(.bottom, 12)
+        .background(Color(.systemBackground).opacity(0.5))
+    }
+
+    // MARK: - Results List
+
+    var resultsList: some View {
+        Group {
+            if results.isEmpty {
+                VStack(spacing: 12) {
+                    Spacer()
+                    Text("🔍").font(.system(size: 40))
+                    Text(query.isEmpty && !hasActiveFilters ? "Start typing to search" : "No results found")
+                        .font(.headline).foregroundStyle(.secondary)
+                    if hasActiveFilters {
+                        Text("Try removing some filters")
+                            .font(.caption).foregroundStyle(.tertiary)
+                    }
+                    Spacer()
+                }
+            } else {
+                List {
+                    ForEach(results, id: \.1.id) { deck, card in
+                        Button {
+                            viewingCard = SearchCardItem(deck: deck, card: card)
+                        } label: {
+                            SearchResultRow(deck: deck, card: card, query: query, selectedTags: selectedTags)
+                        }
+                        .contextMenu {
+                            Button {
+                                editingCard = SearchEditItem(deckID: deck.id, card: card)
+                            } label: {
+                                Label("Edit", systemImage: "pencil")
+                            }
+                            Button {
+                                store.activeDeckID = deck.id
+                                dismiss()
+                            } label: {
+                                Label("Go to Deck", systemImage: "rectangle.stack")
+                            }
+                            Button(role: .destructive) {
+                                deletingCard = SearchEditItem(deckID: deck.id, card: card)
+                                showDeleteAlert = true
+                            } label: {
+                                Label("Delete", systemImage: "trash")
+                            }
+                        }
+                    }
+                }
+                .listStyle(.plain)
+            }
+        }
+    }
+
+    // MARK: - Toolbar
+
+    @ToolbarContentBuilder
+    var searchToolbar: some ToolbarContent {
+        ToolbarItem(placement: .topBarLeading) {
+            Button("Done") { dismiss() }
+        }
+        ToolbarItem(placement: .topBarTrailing) {
+            if hasActiveFilters {
+                Button("Clear") {
+                    selectedTags.removeAll()
+                    selectedDecks.removeAll()
+                    query = ""
+                }
+                .font(.subheadline)
+            }
+        }
+    }
+}
+
+// MARK: - Identifiable wrappers for sheet items
+
+struct SearchCardItem: Identifiable {
+    let id = UUID()
+    let deck: Deck
+    let card: Flashcard
+}
+
+struct SearchEditItem: Identifiable {
+    let id = UUID()
+    let deckID: UUID
+    let card: Flashcard
+}
+
+// MARK: - Card Preview Sheet
+
+struct CardPreviewSheet: View {
+    let deck: Deck
+    let card: Flashcard
+    @Environment(\.dismiss) var dismiss
+    @State private var isFlipped = false
+
+    var body: some View {
+        NavigationStack {
+            ZStack {
+                AppBackgroundLayer()
+
+                VStack(spacing: 24) {
+                    Spacer()
+
+                    FlashcardView(
+                        card: card,
+                        cardIndex: 0,
+                        isFlipped: $isFlipped
+                    )
+
+                    Text(deck.name)
+                        .font(.caption.bold())
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 12).padding(.vertical, 5)
+                        .background(CuteTheme.accent.opacity(0.7), in: Capsule())
+
+                    if !card.tags.isEmpty {
+                        HStack(spacing: 6) {
+                            ForEach(card.tags, id: \.self) { tag in
+                                Text(tag)
+                                    .font(.caption2)
+                                    .padding(.horizontal, 8).padding(.vertical, 4)
+                                    .background(Color.gray.opacity(0.1), in: Capsule())
+                            }
+                        }
+                    }
+
+                    Text("Tap card to flip")
+                        .font(.caption).foregroundStyle(.secondary)
+
+                    Spacer()
+                }
+            }
+            .navigationTitle("Card Preview")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
@@ -1085,6 +1480,91 @@ struct SearchView: View {
                 }
             }
         }
+    }
+}
+
+// MARK: - Filter Chip
+
+struct FilterChip: View {
+    let label: String
+    let icon: String?
+    let isSelected: Bool
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 4) {
+                if let icon = icon {
+                    Text(icon).font(.caption2)
+                }
+                Text(label).font(.caption.bold())
+                if isSelected {
+                    Image(systemName: "checkmark")
+                        .font(.system(size: 9, weight: .bold))
+                }
+            }
+            .padding(.horizontal, 12).padding(.vertical, 7)
+            .background(isSelected ? CuteTheme.accent : Color.gray.opacity(0.1), in: Capsule())
+            .foregroundStyle(isSelected ? .white : .primary)
+        }
+    }
+}
+
+// MARK: - Search Result Row
+
+struct SearchResultRow: View {
+    let deck: Deck
+    let card: Flashcard
+    let query: String
+    let selectedTags: Set<String>
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            // Question
+            Text(card.question)
+                .font(.subheadline.bold())
+
+            // Answer
+            Text(card.answer)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(2)
+
+            // Notes preview
+            if !card.notes.isEmpty {
+                Text(card.notes)
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+                    .lineLimit(1)
+                    .italic()
+            }
+
+            // Deck + Tags
+            HStack(spacing: 6) {
+                Text(deck.name)
+                    .font(.caption2.bold()).foregroundStyle(.white)
+                    .padding(.horizontal, 8).padding(.vertical, 3)
+                    .background(CuteTheme.accent.opacity(0.7), in: Capsule())
+
+                ForEach(card.tags, id: \.self) { tag in
+                    Text(tag)
+                        .font(.caption2)
+                        .padding(.horizontal, 7).padding(.vertical, 3)
+                        .background(
+                            selectedTags.contains(tag)
+                                ? CuteTheme.accent.opacity(0.15)
+                                : Color.gray.opacity(0.08),
+                            in: Capsule()
+                        )
+                        .foregroundStyle(
+                            selectedTags.contains(tag)
+                                ? CuteTheme.accent
+                                : .secondary
+                        )
+                }
+            }
+        }
+        .padding(.vertical, 6)
     }
 }
 
