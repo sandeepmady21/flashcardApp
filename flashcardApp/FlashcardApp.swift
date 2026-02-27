@@ -1135,15 +1135,10 @@ struct CardFormView: View {
     func richEditorSection(title: String, hint: String, attr: Binding<NSAttributedString>) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             Text(title).font(.caption.bold()).foregroundStyle(.secondary).padding(.leading, 4)
-            VStack(spacing: 0) {
-                Text("**B** *I* U̲ · Font · Size  ▸  toolbar appears above keyboard")
-                    .font(.system(size: 10)).foregroundStyle(.tertiary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 12).padding(.top, 8).padding(.bottom, 2)
-                RichTextEditorView(attributedText: attr)
-                    .frame(minHeight: 100)
-            }
-            .background(.white, in: RoundedRectangle(cornerRadius: 12))
+            RichTextEditorView(attributedText: attr)
+                .frame(minHeight: 100)
+                .padding(12) // Added padding so text isn't touching the edges
+                .background(.white, in: RoundedRectangle(cornerRadius: 12))
         }
     }
 
