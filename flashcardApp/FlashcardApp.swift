@@ -36,6 +36,23 @@ class DataStore: ObservableObject {
     init() {
         loadTitle()
         loadDecks()
+        if decks.isEmpty { createSampleDeck() }
+    }
+
+    func createSampleDeck() {
+        let cards: [Flashcard] = [
+            Flashcard(question: "What is the capital of Japan?", answer: "Tokyo", notes: "Tokyo is the most populous metropolitan area in the world with over 37 million people.", tags: ["geography", "asia"]),
+            Flashcard(question: "What is photosynthesis?", answer: "The process plants use to convert sunlight into energy", notes: "Plants absorb CO₂ and water, then use sunlight to produce glucose and oxygen. The chemical equation is 6CO₂ + 6H₂O → C₆H₁₂O₆ + 6O₂", tags: ["science", "biology"]),
+            Flashcard(question: "Who wrote Romeo and Juliet?", answer: "William Shakespeare", notes: "Written around 1594–1596. It's one of his earliest tragedies.", tags: ["literature", "history"]),
+            Flashcard(question: "What is the powerhouse of the cell?", answer: "Mitochondria", notes: "Mitochondria generate most of the cell's supply of ATP, used as a source of chemical energy.", tags: ["science", "biology"]),
+            Flashcard(question: "What year did World War II end?", answer: "1945", notes: "Germany surrendered in May 1945, Japan in August 1945 after the atomic bombings of Hiroshima and Nagasaki.", tags: ["history"]),
+            Flashcard(question: "What is the chemical symbol for gold?", answer: "Au", notes: "From the Latin word 'aurum'. Gold has atomic number 79.", tags: ["science", "chemistry"]),
+            Flashcard(question: "What is the largest ocean on Earth?", answer: "Pacific Ocean", notes: "Covers about 165.25 million km² — more than all the land area on Earth combined.", tags: ["geography"]),
+            Flashcard(question: "What does CPU stand for?", answer: "Central Processing Unit", notes: "Often called the 'brain' of the computer. It performs instructions from programs.", tags: ["technology"]),
+            Flashcard(question: "What is the Pythagorean theorem?", answer: "a² + b² = c²", notes: "In a right triangle, the square of the hypotenuse equals the sum of squares of the other two sides.", tags: ["math"]),
+            Flashcard(question: "What planet is known as the Red Planet?", answer: "Mars", notes: "Its reddish appearance is due to iron oxide (rust) on its surface. It has two small moons: Phobos and Deimos.", tags: ["science", "space"]),
+        ]
+        decks.append(Deck(name: "Study Starter Pack", cards: cards))
     }
 
     func save() {
