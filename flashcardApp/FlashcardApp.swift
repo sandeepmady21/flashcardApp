@@ -245,11 +245,13 @@ class DataStore: ObservableObject {
 // ============================================================
 
 struct CuteTheme {
-    static let pink = Color(red: 1.0, green: 0.78, blue: 0.82)
-    static let softPink = Color(red: 1.0, green: 0.93, blue: 0.95)
-    static let cream = Color(red: 1.0, green: 0.98, blue: 0.95)
-    static let sky = Color(red: 0.85, green: 0.92, blue: 1.0)
-    static let accent = Color(red: 0.82, green: 0.50, blue: 0.62)
+    static let pink = Color(red: 0.96, green: 0.72, blue: 0.76)       // warm pink
+    static let softPink = Color(red: 0.99, green: 0.93, blue: 0.94)   // blush
+    static let cream = Color(red: 0.99, green: 0.97, blue: 0.93)      // warm cream
+    static let sky = Color(red: 0.86, green: 0.90, blue: 0.98)        // periwinkle
+    static let accent = Color(red: 0.78, green: 0.42, blue: 0.56)     // berry pink
+    static let cardBG = Color(red: 1.0, green: 0.995, blue: 0.99)     // warm white
+    static let subtle = Color(red: 0.50, green: 0.44, blue: 0.48)     // warm gray
 }
 
 func compressImage(_ data: Data, maxWidth: CGFloat = 600) -> Data? {
@@ -551,7 +553,7 @@ struct FlashcardApp: App {
 struct AppBG: View {
     var body: some View {
         LinearGradient(
-            colors: [CuteTheme.softPink, CuteTheme.cream, CuteTheme.sky.opacity(0.3)],
+            colors: [CuteTheme.softPink, CuteTheme.cream, CuteTheme.sky.opacity(0.5)],
             startPoint: .topLeading, endPoint: .bottomTrailing
         ).ignoresSafeArea()
     }
@@ -586,7 +588,7 @@ struct HomeView: View {
                 ToolbarItem(placement: .principal) {
                     Button { newTitle = store.appTitle; showRenameTitle = true } label: {
                         Text(store.appTitle)
-                            .font(.title2.bold())
+                            .font(.title3.weight(.bold))
                             .foregroundStyle(.primary)
                     }
                 }
@@ -630,17 +632,17 @@ struct HomeView: View {
     var emptyView: some View {
         VStack(spacing: 20) {
             HStack(spacing: -8) {
-                Text("🐮").font(.system(size: 44)).rotationEffect(.degrees(-10))
-                Text("🐰").font(.system(size: 52))
-                Text("🐼").font(.system(size: 44)).rotationEffect(.degrees(10))
+                Text("🐮").font(.system(size: 40)).rotationEffect(.degrees(-10))
+                Text("🐰").font(.system(size: 48))
+                Text("🐼").font(.system(size: 40)).rotationEffect(.degrees(10))
             }
-            Text("No decks yet!").font(.title2.bold()).foregroundStyle(.secondary)
+            Text("No decks yet!").font(.title3.weight(.semibold)).foregroundStyle(CuteTheme.subtle)
             Button { showNewDeck = true } label: {
-                HStack { Text("✨"); Text("Create First Deck").font(.headline) }
+                HStack(spacing: 6) { Text("✨"); Text("Create First Deck").font(.subheadline.weight(.semibold)) }
                     .foregroundStyle(.white)
-                    .padding(.horizontal, 28).padding(.vertical, 14)
+                    .padding(.horizontal, 28).padding(.vertical, 13)
                     .background(LinearGradient(colors: [CuteTheme.pink, CuteTheme.accent], startPoint: .leading, endPoint: .trailing), in: Capsule())
-                    .shadow(color: CuteTheme.pink.opacity(0.4), radius: 10, y: 5)
+                    .shadow(color: CuteTheme.accent.opacity(0.35), radius: 10, y: 5)
             }
         }
     }
@@ -665,20 +667,20 @@ struct HomeView: View {
 
     func deckRow(_ deck: Deck) -> some View {
         HStack(spacing: 14) {
-            Text("📚").font(.title)
-                .frame(width: 50, height: 50)
-                .background(CuteTheme.pink.opacity(0.2), in: RoundedRectangle(cornerRadius: 14))
-            VStack(alignment: .leading, spacing: 4) {
-                Text(deck.name).font(.headline).foregroundStyle(.primary)
+            Text("📚").font(.title2)
+                .frame(width: 46, height: 46)
+                .background(CuteTheme.pink.opacity(0.25), in: RoundedRectangle(cornerRadius: 13))
+            VStack(alignment: .leading, spacing: 3) {
+                Text(deck.name).font(.subheadline.weight(.semibold)).foregroundStyle(.primary)
                 Text("\(deck.cards.count) card\(deck.cards.count == 1 ? "" : "s")")
-                    .font(.caption).foregroundStyle(.secondary)
+                    .font(.caption).foregroundStyle(CuteTheme.subtle.opacity(0.7))
             }
             Spacer()
-            Image(systemName: "chevron.right").font(.caption.bold()).foregroundStyle(.tertiary)
+            Image(systemName: "chevron.right").font(.caption2.bold()).foregroundStyle(.quaternary)
         }
-        .padding(16)
-        .background(.white, in: RoundedRectangle(cornerRadius: 18))
-        .shadow(color: CuteTheme.pink.opacity(0.12), radius: 8, y: 4)
+        .padding(14)
+        .background(.white.opacity(0.9), in: RoundedRectangle(cornerRadius: 16))
+        .shadow(color: CuteTheme.pink.opacity(0.15), radius: 8, y: 4)
     }
 
     @ToolbarContentBuilder
@@ -781,18 +783,29 @@ struct DeckView: View {
         VStack(spacing: 16) {
             Button { newDeckName = deck?.name ?? ""; showRenameDeck = true } label: {
                 Text(deck?.name ?? "Deck")
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(.secondary)
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(CuteTheme.accent.opacity(0.7))
+                    .tracking(0.3)
             }
+            .padding(.top, 12)
             Spacer()
             if !filterTags.isEmpty {
-                Text("No cards match filters").font(.title3.bold()).foregroundStyle(.secondary)
-                Button("Clear") { filterTags.removeAll() }.buttonStyle(.borderedProminent).tint(CuteTheme.accent)
+                Text("No cards match filters").font(.subheadline.weight(.medium)).foregroundStyle(CuteTheme.subtle)
+                Button("Clear Filters") { filterTags.removeAll() }
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 20).padding(.vertical, 10)
+                    .background(CuteTheme.accent, in: Capsule())
             } else {
-                Text("🐣").font(.system(size: 60))
-                Text("No cards yet").font(.title3.bold()).foregroundStyle(.secondary)
-                Button("Add Card") { showAddCard = true }.buttonStyle(.borderedProminent).tint(CuteTheme.accent)
+                Text("🐣").font(.system(size: 52))
+                Text("No cards yet").font(.subheadline.weight(.medium)).foregroundStyle(CuteTheme.subtle)
+                Button("Add Card") { showAddCard = true }
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 20).padding(.vertical, 10)
+                    .background(CuteTheme.accent, in: Capsule())
             }
+            Spacer()
         }
     }
 
@@ -802,10 +815,11 @@ struct DeckView: View {
             // Tappable deck name
             Button { newDeckName = deck?.name ?? ""; showRenameDeck = true } label: {
                 Text(deck?.name ?? "Deck")
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(.secondary)
+                    .font(.footnote.weight(.semibold))
+                    .foregroundStyle(CuteTheme.accent.opacity(0.7))
+                    .tracking(0.3)
             }
-            .padding(.top, 4).padding(.bottom, 2)
+            .padding(.top, 12).padding(.bottom, 6)
 
             if !filterTags.isEmpty {
                 activeFilterBar
@@ -840,14 +854,14 @@ struct DeckView: View {
     var activeFilterBar: some View {
         HStack {
             Image(systemName: "line.3.horizontal.decrease.circle.fill")
-                .foregroundStyle(CuteTheme.accent)
+                .foregroundStyle(CuteTheme.accent).font(.caption)
             Text("\(filterTags.count) tag\(filterTags.count == 1 ? "" : "s") active")
-                .font(.caption.bold()).foregroundStyle(CuteTheme.accent)
+                .font(.caption2.weight(.medium)).foregroundStyle(CuteTheme.accent)
             Spacer()
             Button("Clear") { filterTags.removeAll() }
-                .font(.caption.bold()).foregroundStyle(.red.opacity(0.7))
+                .font(.caption2.weight(.medium)).foregroundStyle(.red.opacity(0.6))
         }
-        .padding(.horizontal).padding(.vertical, 8)
+        .padding(.horizontal).padding(.vertical, 6)
     }
 
     // MARK: Tag Filter Sheet
@@ -1001,11 +1015,11 @@ struct FlashcardView: View {
     let settings: AppSettings
 
     private let colorPairs: [(Color, Color)] = [
-        (Color(red: 0.95, green: 0.60, blue: 0.65), Color(red: 0.85, green: 0.45, blue: 0.58)),
-        (Color(red: 0.65, green: 0.72, blue: 0.95), Color(red: 0.50, green: 0.58, blue: 0.85)),
-        (Color(red: 0.70, green: 0.88, blue: 0.75), Color(red: 0.50, green: 0.75, blue: 0.60)),
-        (Color(red: 0.90, green: 0.72, blue: 0.55), Color(red: 0.80, green: 0.58, blue: 0.45)),
-        (Color(red: 0.78, green: 0.65, blue: 0.90), Color(red: 0.65, green: 0.48, blue: 0.80)),
+        (Color(red: 0.92, green: 0.56, blue: 0.62), Color(red: 0.82, green: 0.42, blue: 0.52)),  // rose
+        (Color(red: 0.58, green: 0.66, blue: 0.92), Color(red: 0.45, green: 0.52, blue: 0.82)),  // periwinkle
+        (Color(red: 0.55, green: 0.80, blue: 0.68), Color(red: 0.40, green: 0.68, blue: 0.55)),  // mint
+        (Color(red: 0.90, green: 0.68, blue: 0.50), Color(red: 0.80, green: 0.55, blue: 0.40)),  // peach
+        (Color(red: 0.74, green: 0.60, blue: 0.88), Color(red: 0.60, green: 0.44, blue: 0.76)),  // lavender
     ]
 
     var body: some View {
@@ -1027,9 +1041,9 @@ struct FlashcardView: View {
 
     // MARK: Question Side
     var questionSide: some View {
-        RoundedRectangle(cornerRadius: 28)
-            .fill(.white)
-            .shadow(color: CuteTheme.pink.opacity(0.18), radius: 20, y: 10)
+        RoundedRectangle(cornerRadius: 24)
+            .fill(CuteTheme.cardBG)
+            .shadow(color: CuteTheme.pink.opacity(0.25), radius: 16, y: 8)
             .overlay(questionContent)
             .rotation3DEffect(.degrees(isFlipped ? 180 : 0), axis: (x: 0, y: 1, z: 0))
             .opacity(isFlipped ? 0 : 1)
@@ -1039,7 +1053,7 @@ struct FlashcardView: View {
         GeometryReader { geo in
             ScrollView {
                 VStack(spacing: 16) {
-                    Text("QUESTION").font(.caption.bold()).tracking(2).foregroundStyle(.secondary.opacity(0.4))
+                    Text("QUESTION").font(.system(size: 10, weight: .medium)).tracking(2.5).foregroundStyle(CuteTheme.subtle.opacity(0.35))
                     if let rtf = rtfToAttributed(card.questionRTF), rtf.length > 0 {
                         RichTextLabel(attributedText: rtf, textColor: UIColor(settings.questionColor.color))
                             .fixedSize(horizontal: false, vertical: true)
@@ -1056,14 +1070,14 @@ struct FlashcardView: View {
                 .frame(minHeight: geo.size.height)
             }
         }
-        .clipShape(RoundedRectangle(cornerRadius: 28))
+        .clipShape(RoundedRectangle(cornerRadius: 24))
     }
 
     // MARK: Answer Side
     func answerSide(_ cp: (Color, Color)) -> some View {
-        RoundedRectangle(cornerRadius: 28)
+        RoundedRectangle(cornerRadius: 24)
             .fill(LinearGradient(colors: [cp.0, cp.1], startPoint: .topLeading, endPoint: .bottomTrailing))
-            .shadow(color: cp.0.opacity(0.3), radius: 20, y: 10)
+            .shadow(color: cp.0.opacity(0.3), radius: 16, y: 8)
             .overlay(answerContent)
             .rotation3DEffect(.degrees(isFlipped ? 0 : -180), axis: (x: 0, y: 1, z: 0))
             .opacity(isFlipped ? 1 : 0)
@@ -1073,7 +1087,7 @@ struct FlashcardView: View {
         GeometryReader { geo in
             ScrollView {
                 VStack(spacing: 16) {
-                    Text("ANSWER").font(.caption.bold()).tracking(2).foregroundStyle(.white.opacity(0.4))
+                    Text("ANSWER").font(.system(size: 10, weight: .medium)).tracking(2.5).foregroundStyle(.white.opacity(0.35))
                     if let rtf = rtfToAttributed(card.answerRTF), rtf.length > 0 {
                         RichTextLabel(attributedText: rtf, textColor: UIColor(settings.answerColor.color))
                             .fixedSize(horizontal: false, vertical: true)
@@ -1091,24 +1105,24 @@ struct FlashcardView: View {
                 .frame(minHeight: geo.size.height)
             }
         }
-        .clipShape(RoundedRectangle(cornerRadius: 28))
+        .clipShape(RoundedRectangle(cornerRadius: 24))
     }
 
     // MARK: Media Block
     func mediaBlock(imageData: Data?, doodleData: Data?) -> some View {
-        VStack(spacing: 10) {
+        VStack(spacing: 8) {
             if let data = imageData, let img = UIImage(data: data) {
                 Image(uiImage: img)
                     .resizable().scaledToFit()
-                    .frame(maxHeight: 160)
-                    .clipShape(RoundedRectangle(cornerRadius: 14))
+                    .frame(maxHeight: 150)
+                    .clipShape(RoundedRectangle(cornerRadius: 12))
             }
             if let data = doodleData, let drawing = try? PKDrawing(data: data) {
                 let img = drawing.image(from: drawing.bounds, scale: 2.0)
                 Image(uiImage: img)
                     .resizable().scaledToFit()
-                    .frame(maxHeight: 140)
-                    .background(Color.white.opacity(0.15), in: RoundedRectangle(cornerRadius: 14))
+                    .frame(maxHeight: 130)
+                    .background(Color.white.opacity(0.12), in: RoundedRectangle(cornerRadius: 12))
             }
         }
     }
@@ -1123,13 +1137,13 @@ struct FlashcardView: View {
                     } label: {
                         HStack(spacing: 4) {
                             Text(showNotes ? "Hide Notes" : "Show Notes")
-                                .font(.caption.bold())
+                                .font(.caption2.weight(.medium))
                             Image(systemName: showNotes ? "chevron.up" : "chevron.down")
-                                .font(.system(size: 10, weight: .bold))
+                                .font(.system(size: 8, weight: .semibold))
                         }
-                        .foregroundStyle(.white.opacity(0.6))
-                        .padding(.horizontal, 14).padding(.vertical, 6)
-                        .background(.white.opacity(0.15), in: Capsule())
+                        .foregroundStyle(.white.opacity(0.5))
+                        .padding(.horizontal, 12).padding(.vertical, 5)
+                        .background(.white.opacity(0.12), in: Capsule())
                     }
 
                     if showNotes {
@@ -1161,22 +1175,22 @@ struct FlashcardView: View {
 struct DotIndicators: View {
     let total: Int; let current: Int
     var body: some View {
-        HStack(spacing: 6) {
+        HStack(spacing: 5) {
             let max7 = 7
             if total <= max7 {
                 ForEach(0..<total, id: \.self) { i in dot(i == current) }
             } else {
                 let s = max(0, min(current - 3, total - max7))
                 let e = min(s + max7, total)
-                if s > 0 { Circle().fill(CuteTheme.pink.opacity(0.2)).frame(width: 4, height: 4) }
+                if s > 0 { Circle().fill(CuteTheme.pink.opacity(0.3)).frame(width: 4, height: 4) }
                 ForEach(s..<e, id: \.self) { i in dot(i == current) }
-                if e < total { Circle().fill(CuteTheme.pink.opacity(0.2)).frame(width: 4, height: 4) }
+                if e < total { Circle().fill(CuteTheme.pink.opacity(0.3)).frame(width: 4, height: 4) }
             }
         }.animation(.spring(response: 0.3), value: current)
     }
     func dot(_ active: Bool) -> some View {
-        Circle().fill(active ? CuteTheme.accent : CuteTheme.pink.opacity(0.4))
-            .frame(width: active ? 10 : 7, height: active ? 10 : 7)
+        Circle().fill(active ? CuteTheme.accent : CuteTheme.pink.opacity(0.45))
+            .frame(width: active ? 9 : 6, height: active ? 9 : 6)
     }
 }
 
@@ -1693,24 +1707,24 @@ struct SearchView: View {
 struct SearchResultRow: View {
     let deckName: String; let card: Flashcard
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text(card.question).font(.subheadline.bold())
-            Text(card.answer).font(.caption).foregroundStyle(.secondary).lineLimit(2)
+        VStack(alignment: .leading, spacing: 5) {
+            Text(card.question).font(.subheadline.weight(.semibold))
+            Text(card.answer).font(.caption).foregroundStyle(CuteTheme.subtle).lineLimit(2)
             if !card.notes.isEmpty {
                 Text(card.notes).font(.caption2).foregroundStyle(.tertiary).lineLimit(1).italic()
             }
-            HStack(spacing: 6) {
-                Text(deckName).font(.caption2.bold()).foregroundStyle(.white)
-                    .padding(.horizontal, 8).padding(.vertical, 3)
-                    .background(CuteTheme.accent.opacity(0.7), in: Capsule())
+            HStack(spacing: 5) {
+                Text(deckName).font(.caption2.weight(.medium)).foregroundStyle(.white)
+                    .padding(.horizontal, 7).padding(.vertical, 2)
+                    .background(CuteTheme.accent.opacity(0.65), in: Capsule())
                 ForEach(card.tags, id: \.self) { tag in
                     Text(tag).font(.caption2)
-                        .padding(.horizontal, 7).padding(.vertical, 3)
-                        .background(Color.gray.opacity(0.08), in: Capsule())
-                        .foregroundStyle(.secondary)
+                        .padding(.horizontal, 6).padding(.vertical, 2)
+                        .background(Color.gray.opacity(0.06), in: Capsule())
+                        .foregroundStyle(CuteTheme.subtle)
                 }
             }
-        }.padding(.vertical, 4)
+        }.padding(.vertical, 3)
     }
 }
 
@@ -1760,18 +1774,18 @@ struct CardListView: View {
             List {
                 ForEach(Array((deck?.cards ?? []).enumerated()), id: \.element.id) { index, card in
                     Button { currentIndex = index; isFlipped = false; showNotes = false; dismiss() } label: {
-                        HStack(spacing: 14) {
-                            Text("\(index + 1)").font(.caption.bold()).foregroundStyle(.white)
-                                .frame(width: 28, height: 28).background(CuteTheme.accent, in: Circle())
-                            VStack(alignment: .leading, spacing: 3) {
-                                Text(card.question).font(.subheadline.bold()).lineLimit(1)
-                                Text(card.answer).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                        HStack(spacing: 12) {
+                            Text("\(index + 1)").font(.caption2.weight(.semibold)).foregroundStyle(.white)
+                                .frame(width: 26, height: 26).background(CuteTheme.accent.opacity(0.8), in: Circle())
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(card.question).font(.subheadline.weight(.medium)).lineLimit(1)
+                                Text(card.answer).font(.caption).foregroundStyle(CuteTheme.subtle).lineLimit(1)
                             }
                             Spacer()
                             if index == currentIndex {
-                                Image(systemName: "checkmark.circle.fill").foregroundStyle(CuteTheme.accent)
+                                Image(systemName: "checkmark.circle.fill").foregroundStyle(CuteTheme.accent).font(.caption)
                             }
-                        }.padding(.vertical, 2)
+                        }.padding(.vertical, 1)
                     }
                 }
                 .onDelete { offsets in
