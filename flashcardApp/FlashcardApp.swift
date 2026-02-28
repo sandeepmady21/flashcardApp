@@ -713,6 +713,7 @@ struct DeckView: View {
     @State private var showSettings = false
     @State private var showTagFilter = false
     @State private var newDeckName = ""
+    @State private var dragOffset: CGFloat = 0
     @State private var filterTags: Set<String> = []
 
     var deck: Deck? { store.decks.first { $0.id == deckID } }
@@ -799,27 +800,15 @@ struct DeckView: View {
 
             Spacer(minLength: 4)
 
-            ZStack {
-                FlashcardView(
-                    card: filteredCards[safeIndex],
-                    cardIndex: safeIndex,
-                    isFlipped: $isFlipped,
-                    showNotes: $showNotes,
-                    settings: store.settings
-                )
-
-                // Edge swipe zones for browsing cards
-                HStack(spacing: 0) {
-                    Color.clear.frame(width: 28)
-                        .contentShape(Rectangle())
-                        .gesture(edgeSwipeGesture)
-                    Spacer()
-                    Color.clear.frame(width: 28)
-                        .contentShape(Rectangle())
-                        .gesture(edgeSwipeGesture)
-                }
-                .padding(.horizontal, 16)
-            }
+            FlashcardView(
+                card: filteredCards[safeIndex],
+                cardIndex: safeIndex,
+                isFlipped: $isFlipped,
+                showNotes: $showNotes,
+                settings: store.settings
+            )
+            .offset(x: dragOffset)
+            .gesture(swipeGesture)
 
             Spacer(minLength: 4)
 
@@ -963,16 +952,19 @@ struct DeckView: View {
     }
 
     // MARK: Gestures
-    var edgeSwipeGesture: some Gesture {
-        DragGesture(minimumDistance: 20)
+    var swipeGesture: some Gesture {
+        DragGesture()
+            .onChanged { v in dragOffset = v.translation.width }
             .onEnded { v in
-                let th: CGFloat = 50
+                let th: CGFloat = 60
                 if v.translation.width < -th && safeIndex < filteredCards.count - 1 {
-                    withAnimation(.spring(response: 0.35)) { isFlipped = false; showNotes = false; currentIndex = safeIndex + 1 }
+                    withAnimation(.spring(response: 0.35)) { dragOffset = 0; isFlipped = false; showNotes = false; currentIndex = safeIndex + 1 }
                     UIImpactFeedbackGenerator(style: .light).impactOccurred()
                 } else if v.translation.width > th && safeIndex > 0 {
-                    withAnimation(.spring(response: 0.35)) { isFlipped = false; showNotes = false; currentIndex = safeIndex - 1 }
+                    withAnimation(.spring(response: 0.35)) { dragOffset = 0; isFlipped = false; showNotes = false; currentIndex = safeIndex - 1 }
                     UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                } else {
+                    withAnimation(.spring(response: 0.3)) { dragOffset = 0 }
                 }
             }
     }
