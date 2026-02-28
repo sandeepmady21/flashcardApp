@@ -739,8 +739,7 @@ struct DeckView: View {
                 cardBrowser
             }
         }
-        .navigationTitle(deck?.name ?? "Deck")
-        .navigationBarTitleDisplayMode(.large)
+        .navigationBarTitleDisplayMode(.inline)
         .toolbar { deckToolbar }
         .sheet(isPresented: $showAddCard) { addSheet }
         .sheet(isPresented: $showEditCard) { editSheet }
@@ -780,6 +779,12 @@ struct DeckView: View {
     // MARK: Empty
     var deckEmptyView: some View {
         VStack(spacing: 16) {
+            Button { newDeckName = deck?.name ?? ""; showRenameDeck = true } label: {
+                Text(deck?.name ?? "Deck")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.secondary)
+            }
+            Spacer()
             if !filterTags.isEmpty {
                 Text("No cards match filters").font(.title3.bold()).foregroundStyle(.secondary)
                 Button("Clear") { filterTags.removeAll() }.buttonStyle(.borderedProminent).tint(CuteTheme.accent)
@@ -794,6 +799,14 @@ struct DeckView: View {
     // MARK: Card Browser
     var cardBrowser: some View {
         VStack(spacing: 0) {
+            // Tappable deck name
+            Button { newDeckName = deck?.name ?? ""; showRenameDeck = true } label: {
+                Text(deck?.name ?? "Deck")
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.top, 4).padding(.bottom, 2)
+
             if !filterTags.isEmpty {
                 activeFilterBar
             }
@@ -925,7 +938,6 @@ struct DeckView: View {
                     }
                 }
                 Divider()
-                Button { newDeckName = deck?.name ?? ""; showRenameDeck = true } label: { Label("Rename Deck", systemImage: "character.cursor.ibeam") }
                 Button { showExport = true } label: { Label("Export", systemImage: "square.and.arrow.up") }
                 Button { showSettings = true } label: { Label("Settings", systemImage: "gearshape") }
                 Divider()
@@ -1863,7 +1875,7 @@ struct SettingsView: View {
                 EditButton().font(.caption)
             }
         } footer: {
-            Text("Tap + to pin actions to the toolbar. Tap − to move back to menu. Drag to reorder.")
+            Text("Tap + to pin to toolbar, − to move to menu. Drag to reorder.")
         }
     }
 
@@ -1872,7 +1884,7 @@ struct SettingsView: View {
     }
 
     func addToToolbar(_ id: String) {
-        if store.settings.toolbarActions.count < 5 && !store.settings.toolbarActions.contains(id) {
+        if !store.settings.toolbarActions.contains(id) {
             withAnimation { store.settings.toolbarActions.append(id) }
         }
     }
