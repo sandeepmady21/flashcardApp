@@ -37,6 +37,7 @@ struct AppSettings: Codable, Equatable {
     var answerFontSize: CGFloat = 26
     var questionColor: CodableColor = .darkGray
     var answerColor: CodableColor = .white
+    var toolbarActions: [String] = ["search", "edit", "add"] // Pinned to top bar
 
     var resolvedDesign: Font.Design {
         switch fontDesign {
@@ -46,6 +47,15 @@ struct AppSettings: Codable, Equatable {
         default: return .rounded
         }
     }
+
+    static let allActions: [(id: String, label: String, icon: String)] = [
+        ("search", "Search", "magnifyingglass"),
+        ("edit", "Edit Card", "pencil.circle"),
+        ("shuffle", "Shuffle", "shuffle"),
+        ("filter", "Filter Tags", "tag"),
+        ("list", "All Cards", "list.bullet.rectangle"),
+        ("add", "Add Card", "plus.circle.fill"),
+    ]
 }
 
 struct Flashcard: Identifiable, Codable {
@@ -57,9 +67,78 @@ struct Flashcard: Identifiable, Codable {
     var questionRTF: Data? = nil
     var answerRTF: Data? = nil
     var notesRTF: Data? = nil
-    var imageData: Data? = nil
-    var doodleData: Data? = nil
+    var questionImageData: Data? = nil
+    var answerImageData: Data? = nil
+    var questionDoodleData: Data? = nil
+    var answerDoodleData: Data? = nil
     var createdAt: Date = Date()
+
+    // Migration: old single fields
+    var imageData: Data? {
+        get { questionImageData }
+        set { questionImageData = newValue }
+    }
+    var doodleData: Data? {
+        get { questionDoodleData }
+        set { questionDoodleData = newValue }
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, question, answer, notes, tags
+        case questionRTF, answerRTF, notesRTF
+        case questionImageData, answerImageData
+        case questionDoodleData, answerDoodleData
+        case createdAt
+        // Legacy keys
+        case imageData, doodleData
+    }
+
+    init(id: UUID = UUID(), question: String, answer: String, notes: String = "", tags: [String] = [],
+         questionRTF: Data? = nil, answerRTF: Data? = nil, notesRTF: Data? = nil,
+         questionImageData: Data? = nil, answerImageData: Data? = nil,
+         questionDoodleData: Data? = nil, answerDoodleData: Data? = nil,
+         createdAt: Date = Date()) {
+        self.id = id; self.question = question; self.answer = answer; self.notes = notes; self.tags = tags
+        self.questionRTF = questionRTF; self.answerRTF = answerRTF; self.notesRTF = notesRTF
+        self.questionImageData = questionImageData; self.answerImageData = answerImageData
+        self.questionDoodleData = questionDoodleData; self.answerDoodleData = answerDoodleData
+        self.createdAt = createdAt
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(UUID.self, forKey: .id)
+        question = try c.decode(String.self, forKey: .question)
+        answer = try c.decode(String.self, forKey: .answer)
+        notes = try c.decodeIfPresent(String.self, forKey: .notes) ?? ""
+        tags = try c.decodeIfPresent([String].self, forKey: .tags) ?? []
+        questionRTF = try c.decodeIfPresent(Data.self, forKey: .questionRTF)
+        answerRTF = try c.decodeIfPresent(Data.self, forKey: .answerRTF)
+        notesRTF = try c.decodeIfPresent(Data.self, forKey: .notesRTF)
+        createdAt = try c.decodeIfPresent(Date.self, forKey: .createdAt) ?? Date()
+        // Try new keys first, fall back to legacy
+        questionImageData = try c.decodeIfPresent(Data.self, forKey: .questionImageData) ?? c.decodeIfPresent(Data.self, forKey: .imageData)
+        answerImageData = try c.decodeIfPresent(Data.self, forKey: .answerImageData)
+        questionDoodleData = try c.decodeIfPresent(Data.self, forKey: .questionDoodleData) ?? c.decodeIfPresent(Data.self, forKey: .doodleData)
+        answerDoodleData = try c.decodeIfPresent(Data.self, forKey: .answerDoodleData)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(id, forKey: .id)
+        try c.encode(question, forKey: .question)
+        try c.encode(answer, forKey: .answer)
+        try c.encode(notes, forKey: .notes)
+        try c.encode(tags, forKey: .tags)
+        try c.encodeIfPresent(questionRTF, forKey: .questionRTF)
+        try c.encodeIfPresent(answerRTF, forKey: .answerRTF)
+        try c.encodeIfPresent(notesRTF, forKey: .notesRTF)
+        try c.encodeIfPresent(questionImageData, forKey: .questionImageData)
+        try c.encodeIfPresent(answerImageData, forKey: .answerImageData)
+        try c.encodeIfPresent(questionDoodleData, forKey: .questionDoodleData)
+        try c.encodeIfPresent(answerDoodleData, forKey: .answerDoodleData)
+        try c.encode(createdAt, forKey: .createdAt)
+    }
 }
 
 struct Deck: Identifiable, Codable {
@@ -431,6 +510,7 @@ struct RichTextLabel: UIViewRepresentable {
         label.lineBreakMode = .byWordWrapping
         label.setContentHuggingPriority(.required, for: .vertical)
         label.setContentCompressionResistancePriority(.required, for: .vertical)
+        label.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         return label
     }
 
@@ -440,11 +520,12 @@ struct RichTextLabel: UIViewRepresentable {
         let ps = NSMutableParagraphStyle()
         ps.alignment = textAlignment
         ms.addAttribute(.paragraphStyle, value: ps, range: full)
-        // Apply default color where no color is explicitly set
         ms.enumerateAttribute(.foregroundColor, in: full) { val, r, _ in
             if val == nil { ms.addAttribute(.foregroundColor, value: textColor, range: r) }
         }
         uiView.attributedText = ms
+        // Ensure wrapping within parent width
+        uiView.preferredMaxLayoutWidth = UIScreen.main.bounds.width - 120
     }
 }
 
@@ -500,7 +581,16 @@ struct HomeView: View {
                     deckList
                 }
             }
-            .navigationTitle(store.appTitle)
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .principal) {
+                    Button { newTitle = store.appTitle; showRenameTitle = true } label: {
+                        Text(store.appTitle)
+                            .font(.title2.bold())
+                            .foregroundStyle(.primary)
+                    }
+                }
+            }
             .toolbar { homeToolbar }
             .navigationDestination(for: UUID.self) { deckID in
                 DeckView(deckID: deckID)
@@ -600,11 +690,6 @@ struct HomeView: View {
                 Image(systemName: "plus.circle.fill").font(.title3)
             }.tint(CuteTheme.accent)
         }
-        ToolbarItem(placement: .topBarLeading) {
-            Button { newTitle = store.appTitle; showRenameTitle = true } label: {
-                Image(systemName: "pencil.circle")
-            }
-        }
     }
 }
 
@@ -628,7 +713,6 @@ struct DeckView: View {
     @State private var showSettings = false
     @State private var showTagFilter = false
     @State private var newDeckName = ""
-    @State private var dragOffset: CGFloat = 0
     @State private var filterTags: Set<String> = []
 
     var deck: Deck? { store.decks.first { $0.id == deckID } }
@@ -709,42 +793,40 @@ struct DeckView: View {
     // MARK: Card Browser
     var cardBrowser: some View {
         VStack(spacing: 0) {
-            // Active filter indicator
             if !filterTags.isEmpty {
                 activeFilterBar
             }
 
-            Spacer()
+            Spacer(minLength: 4)
 
-            FlashcardView(
-                card: filteredCards[safeIndex],
-                cardIndex: safeIndex,
-                isFlipped: $isFlipped,
-                showNotes: $showNotes,
-                settings: store.settings
-            )
-            .offset(x: dragOffset)
-            .gesture(swipeGesture)
-            .contextMenu {
-                Button { showEditCard = true } label: { Label("Edit", systemImage: "pencil") }
-                Button {
-                    store.shuffleDeck(deckID)
-                    currentIndex = 0; isFlipped = false; showNotes = false
-                    UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-                } label: { Label("Shuffle", systemImage: "shuffle") }
-                Button(role: .destructive) { showDeleteAlert = true } label: { Label("Delete", systemImage: "trash") }
+            ZStack {
+                FlashcardView(
+                    card: filteredCards[safeIndex],
+                    cardIndex: safeIndex,
+                    isFlipped: $isFlipped,
+                    showNotes: $showNotes,
+                    settings: store.settings
+                )
+
+                // Edge swipe zones for browsing cards
+                HStack(spacing: 0) {
+                    Color.clear.frame(width: 28)
+                        .contentShape(Rectangle())
+                        .gesture(edgeSwipeGesture)
+                    Spacer()
+                    Color.clear.frame(width: 28)
+                        .contentShape(Rectangle())
+                        .gesture(edgeSwipeGesture)
+                }
+                .padding(.horizontal, 16)
             }
 
-            Spacer()
+            Spacer(minLength: 4)
 
             if filteredCards.count > 1 {
                 DotIndicators(total: filteredCards.count, current: safeIndex)
-                    .padding(.bottom, 8)
+                    .padding(.bottom, 16)
             }
-
-            Text("Swipe to browse · Tap to flip · Hold for options")
-                .font(.caption).foregroundStyle(.secondary)
-                .padding(.bottom, 16)
         }
         .onAppear {
             if currentIndex >= filteredCards.count {
@@ -806,20 +888,60 @@ struct DeckView: View {
     }
 
     // MARK: Toolbar
+    func toolbarAction(_ id: String) {
+        switch id {
+        case "search": showSearch = true
+        case "edit": showEditCard = true
+        case "shuffle":
+            store.shuffleDeck(deckID)
+            currentIndex = 0; isFlipped = false; showNotes = false
+            UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+        case "filter": showTagFilter = true
+        case "list": showCardList = true
+        case "add": showAddCard = true
+        default: break
+        }
+    }
+
+    func iconFor(_ id: String) -> String {
+        AppSettings.allActions.first { $0.id == id }?.icon ?? "questionmark"
+    }
+
+    var pinnedActions: [String] { store.settings.toolbarActions }
+    var overflowActions: [String] {
+        AppSettings.allActions.map(\.id).filter { !pinnedActions.contains($0) }
+    }
+
     @ToolbarContentBuilder
     var deckToolbar: some ToolbarContent {
         ToolbarItemGroup(placement: .topBarTrailing) {
-            Button { showSearch = true } label: { Image(systemName: "magnifyingglass") }
+            ForEach(pinnedActions, id: \.self) { id in
+                if id == "add" {
+                    Button { toolbarAction(id) } label: {
+                        Image(systemName: iconFor(id)).font(.title3)
+                    }.tint(CuteTheme.accent)
+                } else {
+                    Button { toolbarAction(id) } label: {
+                        Image(systemName: iconFor(id))
+                    }
+                }
+            }
             Menu {
-                Button { showCardList = true } label: { Label("All Cards", systemImage: "list.bullet.rectangle") }
-                Button { showTagFilter = true } label: { Label("Filter Tags", systemImage: "tag") }
-                Button { newDeckName = deck?.name ?? ""; showRenameDeck = true } label: { Label("Rename Deck", systemImage: "pencil") }
+                // Overflow actions not pinned
+                ForEach(overflowActions, id: \.self) { id in
+                    if let action = AppSettings.allActions.first(where: { $0.id == id }) {
+                        Button { toolbarAction(id) } label: {
+                            Label(action.label, systemImage: action.icon)
+                        }
+                    }
+                }
+                Divider()
+                Button { newDeckName = deck?.name ?? ""; showRenameDeck = true } label: { Label("Rename Deck", systemImage: "character.cursor.ibeam") }
                 Button { showExport = true } label: { Label("Export", systemImage: "square.and.arrow.up") }
                 Button { showSettings = true } label: { Label("Settings", systemImage: "gearshape") }
+                Divider()
+                Button(role: .destructive) { showDeleteAlert = true } label: { Label("Delete Card", systemImage: "trash") }
             } label: { Image(systemName: "ellipsis.circle") }
-            Button { showAddCard = true } label: {
-                Image(systemName: "plus.circle.fill").font(.title3)
-            }.tint(CuteTheme.accent)
         }
     }
 
@@ -840,20 +962,17 @@ struct DeckView: View {
         }
     }
 
-    // MARK: Swipe & Delete
-    var swipeGesture: some Gesture {
-        DragGesture()
-            .onChanged { v in dragOffset = v.translation.width }
+    // MARK: Gestures
+    var edgeSwipeGesture: some Gesture {
+        DragGesture(minimumDistance: 20)
             .onEnded { v in
-                let th: CGFloat = 60
+                let th: CGFloat = 50
                 if v.translation.width < -th && safeIndex < filteredCards.count - 1 {
-                    withAnimation(.spring(response: 0.35)) { dragOffset = 0; isFlipped = false; showNotes = false; currentIndex = safeIndex + 1 }
+                    withAnimation(.spring(response: 0.35)) { isFlipped = false; showNotes = false; currentIndex = safeIndex + 1 }
                     UIImpactFeedbackGenerator(style: .light).impactOccurred()
                 } else if v.translation.width > th && safeIndex > 0 {
-                    withAnimation(.spring(response: 0.35)) { dragOffset = 0; isFlipped = false; showNotes = false; currentIndex = safeIndex - 1 }
+                    withAnimation(.spring(response: 0.35)) { isFlipped = false; showNotes = false; currentIndex = safeIndex - 1 }
                     UIImpactFeedbackGenerator(style: .light).impactOccurred()
-                } else {
-                    withAnimation(.spring(response: 0.3)) { dragOffset = 0 }
                 }
             }
     }
@@ -891,7 +1010,7 @@ struct FlashcardView: View {
             answerSide(cp)
             questionSide
         }
-        .frame(maxHeight: 500)
+        .frame(maxHeight: 560)
         .padding(.horizontal, 16)
         .onTapGesture {
             withAnimation(.spring(response: 0.4, dampingFraction: 0.8)) {
@@ -913,24 +1032,25 @@ struct FlashcardView: View {
     }
 
     var questionContent: some View {
-        ScrollView {
-            VStack(spacing: 16) {
-                Spacer(minLength: 20)
-                Text("QUESTION").font(.caption.bold()).tracking(2).foregroundStyle(.secondary.opacity(0.4))
-                if let rtf = rtfToAttributed(card.questionRTF), rtf.length > 0 {
-                    RichTextLabel(attributedText: rtf, textColor: UIColor(settings.questionColor.color))
-                        .fixedSize(horizontal: false, vertical: true)
-                } else {
-                    Text(card.question)
-                        .font(.system(size: settings.questionFontSize, weight: .bold, design: settings.resolvedDesign))
-                        .multilineTextAlignment(.center)
-                        .foregroundStyle(settings.questionColor.color)
+        GeometryReader { geo in
+            ScrollView {
+                VStack(spacing: 16) {
+                    Text("QUESTION").font(.caption.bold()).tracking(2).foregroundStyle(.secondary.opacity(0.4))
+                    if let rtf = rtfToAttributed(card.questionRTF), rtf.length > 0 {
+                        RichTextLabel(attributedText: rtf, textColor: UIColor(settings.questionColor.color))
+                            .fixedSize(horizontal: false, vertical: true)
+                    } else {
+                        Text(card.question)
+                            .font(.system(size: settings.questionFontSize, weight: .bold, design: settings.resolvedDesign))
+                            .multilineTextAlignment(.center)
+                            .foregroundStyle(settings.questionColor.color)
+                    }
+                    mediaBlock(imageData: card.questionImageData, doodleData: card.questionDoodleData)
                 }
-                cardMedia
-                Spacer(minLength: 20)
+                .frame(maxWidth: .infinity)
+                .padding(28)
+                .frame(minHeight: geo.size.height)
             }
-            .frame(maxWidth: .infinity)
-            .padding(28)
         }
         .clipShape(RoundedRectangle(cornerRadius: 28))
     }
@@ -946,39 +1066,40 @@ struct FlashcardView: View {
     }
 
     var answerContent: some View {
-        ScrollView {
-            VStack(spacing: 16) {
-                Spacer(minLength: 20)
-                Text("ANSWER").font(.caption.bold()).tracking(2).foregroundStyle(.white.opacity(0.4))
-                if let rtf = rtfToAttributed(card.answerRTF), rtf.length > 0 {
-                    RichTextLabel(attributedText: rtf, textColor: UIColor(settings.answerColor.color))
-                        .fixedSize(horizontal: false, vertical: true)
-                } else {
-                    Text(card.answer)
-                        .font(.system(size: settings.answerFontSize, weight: .bold, design: settings.resolvedDesign))
-                        .multilineTextAlignment(.center)
-                        .foregroundStyle(settings.answerColor.color)
+        GeometryReader { geo in
+            ScrollView {
+                VStack(spacing: 16) {
+                    Text("ANSWER").font(.caption.bold()).tracking(2).foregroundStyle(.white.opacity(0.4))
+                    if let rtf = rtfToAttributed(card.answerRTF), rtf.length > 0 {
+                        RichTextLabel(attributedText: rtf, textColor: UIColor(settings.answerColor.color))
+                            .fixedSize(horizontal: false, vertical: true)
+                    } else {
+                        Text(card.answer)
+                            .font(.system(size: settings.answerFontSize, weight: .bold, design: settings.resolvedDesign))
+                            .multilineTextAlignment(.center)
+                            .foregroundStyle(settings.answerColor.color)
+                    }
+                    mediaBlock(imageData: card.answerImageData, doodleData: card.answerDoodleData)
+                    notesSection
                 }
-                cardMedia
-                notesSection
-                Spacer(minLength: 20)
+                .frame(maxWidth: .infinity)
+                .padding(28)
+                .frame(minHeight: geo.size.height)
             }
-            .frame(maxWidth: .infinity)
-            .padding(28)
         }
         .clipShape(RoundedRectangle(cornerRadius: 28))
     }
 
-    // MARK: Media (Image + Doodle)
-    var cardMedia: some View {
+    // MARK: Media Block
+    func mediaBlock(imageData: Data?, doodleData: Data?) -> some View {
         VStack(spacing: 10) {
-            if let data = card.imageData, let img = UIImage(data: data) {
+            if let data = imageData, let img = UIImage(data: data) {
                 Image(uiImage: img)
                     .resizable().scaledToFit()
                     .frame(maxHeight: 160)
                     .clipShape(RoundedRectangle(cornerRadius: 14))
             }
-            if let data = card.doodleData, let drawing = try? PKDrawing(data: data) {
+            if let data = doodleData, let drawing = try? PKDrawing(data: data) {
                 let img = drawing.image(from: drawing.bounds, scale: 2.0)
                 Image(uiImage: img)
                     .resizable().scaledToFit()
@@ -1011,12 +1132,15 @@ struct FlashcardView: View {
                         if let rtf = rtfToAttributed(card.notesRTF), rtf.length > 0 {
                             RichTextLabel(attributedText: rtf, textColor: UIColor.white.withAlphaComponent(0.85))
                                 .fixedSize(horizontal: false, vertical: true)
+                                .frame(maxWidth: .infinity)
                                 .transition(.move(edge: .top).combined(with: .opacity))
                         } else {
                             Text(card.notes)
                                 .font(.system(size: 14, design: settings.resolvedDesign))
                                 .multilineTextAlignment(.center)
                                 .foregroundStyle(.white.opacity(0.85))
+                                .fixedSize(horizontal: false, vertical: true)
+                                .frame(maxWidth: .infinity)
                                 .transition(.move(edge: .top).combined(with: .opacity))
                         }
                     }
@@ -1066,10 +1190,14 @@ struct CardFormView: View {
     @State private var notesAttr: NSAttributedString
     @State private var tags: [String]
     @State private var newTag = ""
-    @State private var imageData: Data?
-    @State private var doodleData: Data?
-    @State private var selectedPhoto: PhotosPickerItem? = nil
-    @State private var showDoodle = false
+    @State private var qImageData: Data?
+    @State private var aImageData: Data?
+    @State private var qDoodleData: Data?
+    @State private var aDoodleData: Data?
+    @State private var selectedQPhoto: PhotosPickerItem? = nil
+    @State private var selectedAPhoto: PhotosPickerItem? = nil
+    @State private var showQDoodle = false
+    @State private var showADoodle = false
     let deckTags: [String]
     var onSave: (Flashcard) -> Void
     private var existingID: UUID?
@@ -1077,32 +1205,24 @@ struct CardFormView: View {
     init(mode: CardFormMode, existingCard: Flashcard? = nil, deckTags: [String] = [], onSave: @escaping (Flashcard) -> Void) {
         self.mode = mode; self.deckTags = deckTags; self.onSave = onSave
 
-        // Load rich text if available, fall back to plain text
         let qAttr: NSAttributedString
-        if let rtf = existingCard?.questionRTF, let attr = rtfToAttributed(rtf) {
-            qAttr = attr
-        } else {
-            qAttr = NSAttributedString(string: existingCard?.question ?? "", attributes: [.font: UIFont.systemFont(ofSize: 17)])
-        }
+        if let rtf = existingCard?.questionRTF, let attr = rtfToAttributed(rtf) { qAttr = attr }
+        else { qAttr = NSAttributedString(string: existingCard?.question ?? "", attributes: [.font: UIFont.systemFont(ofSize: 17)]) }
         let aAttr: NSAttributedString
-        if let rtf = existingCard?.answerRTF, let attr = rtfToAttributed(rtf) {
-            aAttr = attr
-        } else {
-            aAttr = NSAttributedString(string: existingCard?.answer ?? "", attributes: [.font: UIFont.systemFont(ofSize: 17)])
-        }
+        if let rtf = existingCard?.answerRTF, let attr = rtfToAttributed(rtf) { aAttr = attr }
+        else { aAttr = NSAttributedString(string: existingCard?.answer ?? "", attributes: [.font: UIFont.systemFont(ofSize: 17)]) }
         let nAttr: NSAttributedString
-        if let rtf = existingCard?.notesRTF, let attr = rtfToAttributed(rtf) {
-            nAttr = attr
-        } else {
-            nAttr = NSAttributedString(string: existingCard?.notes ?? "", attributes: [.font: UIFont.systemFont(ofSize: 15)])
-        }
+        if let rtf = existingCard?.notesRTF, let attr = rtfToAttributed(rtf) { nAttr = attr }
+        else { nAttr = NSAttributedString(string: existingCard?.notes ?? "", attributes: [.font: UIFont.systemFont(ofSize: 15)]) }
 
         _questionAttr = State(initialValue: qAttr)
         _answerAttr = State(initialValue: aAttr)
         _notesAttr = State(initialValue: nAttr)
         _tags = State(initialValue: existingCard?.tags ?? [])
-        _imageData = State(initialValue: existingCard?.imageData)
-        _doodleData = State(initialValue: existingCard?.doodleData)
+        _qImageData = State(initialValue: existingCard?.questionImageData)
+        _aImageData = State(initialValue: existingCard?.answerImageData)
+        _qDoodleData = State(initialValue: existingCard?.questionDoodleData)
+        _aDoodleData = State(initialValue: existingCard?.answerDoodleData)
         self.existingID = existingCard?.id
     }
 
@@ -1114,12 +1234,18 @@ struct CardFormView: View {
         NavigationStack {
             ScrollView {
                 VStack(spacing: 20) {
-                    richEditorSection(title: "Question", hint: "Type your question...", attr: $questionAttr)
-                    richEditorSection(title: "Answer", hint: "Type the answer...", attr: $answerAttr)
-                    richEditorSection(title: "Notes (hidden on card)", hint: "Extra details, hints...", attr: $notesAttr)
+                    richEditorSection(title: "Question", hint: "", attr: $questionAttr)
+                    mediaDoodleRow(label: "Question", imageData: $qImageData, doodleData: $qDoodleData, photoPicker: $selectedQPhoto, showDoodle: $showQDoodle)
+
+                    Divider().padding(.vertical, 4)
+
+                    richEditorSection(title: "Answer", hint: "", attr: $answerAttr)
+                    mediaDoodleRow(label: "Answer", imageData: $aImageData, doodleData: $aDoodleData, photoPicker: $selectedAPhoto, showDoodle: $showADoodle)
+
+                    Divider().padding(.vertical, 4)
+
+                    richEditorSection(title: "Notes (hidden on card)", hint: "", attr: $notesAttr)
                     tagsSection
-                    mediaSection
-                    doodleSection
                 }
                 .padding()
             }
@@ -1127,9 +1253,43 @@ struct CardFormView: View {
             .navigationTitle(mode == .add ? "New Card ✨" : "Edit Card")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { formToolbar }
-            .onChange(of: selectedPhoto) { item in loadPhoto(item) }
-            .sheet(isPresented: $showDoodle) { DoodleSheet(doodleData: $doodleData) }
+            .onChange(of: selectedQPhoto) { item in loadPhoto(item, into: $qImageData) }
+            .onChange(of: selectedAPhoto) { item in loadPhoto(item, into: $aImageData) }
+            .sheet(isPresented: $showQDoodle) { DoodleSheet(doodleData: $qDoodleData) }
+            .sheet(isPresented: $showADoodle) { DoodleSheet(doodleData: $aDoodleData) }
         }
+    }
+
+    func mediaDoodleRow(label: String, imageData: Binding<Data?>, doodleData: Binding<Data?>, photoPicker: Binding<PhotosPickerItem?>, showDoodle: Binding<Bool>) -> some View {
+        VStack(spacing: 8) {
+            // Image preview
+            if let data = imageData.wrappedValue, let img = UIImage(data: data) {
+                Image(uiImage: img).resizable().scaledToFit().frame(maxHeight: 150)
+                    .clipShape(RoundedRectangle(cornerRadius: 10))
+                Button("Remove Image", role: .destructive) { imageData.wrappedValue = nil }.font(.caption)
+            }
+            // Doodle preview
+            if let data = doodleData.wrappedValue, let drawing = try? PKDrawing(data: data) {
+                let img = drawing.image(from: drawing.bounds, scale: 2.0)
+                Image(uiImage: img).resizable().scaledToFit().frame(maxHeight: 120)
+                    .background(Color.gray.opacity(0.05), in: RoundedRectangle(cornerRadius: 10))
+                Button("Remove Doodle", role: .destructive) { doodleData.wrappedValue = nil }.font(.caption)
+            }
+            // Buttons row
+            HStack(spacing: 12) {
+                PhotosPicker(selection: photoPicker, matching: .images) {
+                    Label(imageData.wrappedValue == nil ? "Image" : "Change", systemImage: "photo")
+                        .font(.caption.bold())
+                }
+                Button { showDoodle.wrappedValue = true } label: {
+                    Label(doodleData.wrappedValue == nil ? "Doodle" : "Edit", systemImage: "pencil.tip.crop.circle")
+                        .font(.caption.bold())
+                }
+            }
+            .padding(.vertical, 4)
+        }
+        .padding(10)
+        .background(.white, in: RoundedRectangle(cornerRadius: 12))
     }
 
     func richEditorSection(title: String, hint: String, attr: Binding<NSAttributedString>) -> some View {
@@ -1137,7 +1297,6 @@ struct CardFormView: View {
             Text(title).font(.caption.bold()).foregroundStyle(.secondary).padding(.leading, 4)
             RichTextEditorView(attributedText: attr)
                 .frame(minHeight: 100)
-                .padding(12) // Added padding so text isn't touching the edges
                 .background(.white, in: RoundedRectangle(cornerRadius: 12))
         }
     }
@@ -1194,46 +1353,6 @@ struct CardFormView: View {
         }
     }
 
-    var mediaSection: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text("Image").font(.caption.bold()).foregroundStyle(.secondary).padding(.leading, 4)
-            VStack(spacing: 10) {
-                if let data = imageData, let img = UIImage(data: data) {
-                    Image(uiImage: img).resizable().scaledToFit().frame(maxHeight: 200)
-                        .clipShape(RoundedRectangle(cornerRadius: 12))
-                    Button("Remove Image", role: .destructive) { imageData = nil }
-                        .font(.caption)
-                }
-                PhotosPicker(selection: $selectedPhoto, matching: .images) {
-                    Label(imageData == nil ? "Add Image" : "Change Image", systemImage: "photo")
-                }
-            }
-            .padding(12)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(.white, in: RoundedRectangle(cornerRadius: 12))
-        }
-    }
-
-    var doodleSection: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text("Doodle").font(.caption.bold()).foregroundStyle(.secondary).padding(.leading, 4)
-            VStack(spacing: 10) {
-                if let data = doodleData, let drawing = try? PKDrawing(data: data) {
-                    let img = drawing.image(from: drawing.bounds, scale: 2.0)
-                    Image(uiImage: img).resizable().scaledToFit().frame(maxHeight: 150)
-                        .background(Color.gray.opacity(0.05), in: RoundedRectangle(cornerRadius: 12))
-                    Button("Remove Doodle", role: .destructive) { doodleData = nil }.font(.caption)
-                }
-                Button { showDoodle = true } label: {
-                    Label(doodleData == nil ? "Draw Doodle" : "Edit Doodle", systemImage: "pencil.tip.crop.circle")
-                }
-            }
-            .padding(12)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(.white, in: RoundedRectangle(cornerRadius: 12))
-        }
-    }
-
     @ToolbarContentBuilder var formToolbar: some ToolbarContent {
         ToolbarItem(placement: .cancellationAction) { Button("Cancel") { dismiss() } }
         ToolbarItem(placement: .confirmationAction) {
@@ -1250,20 +1369,22 @@ struct CardFormView: View {
             questionRTF: attributedToRTF(questionAttr),
             answerRTF: attributedToRTF(answerAttr),
             notesRTF: attributedToRTF(notesAttr),
-            imageData: imageData,
-            doodleData: doodleData
+            questionImageData: qImageData,
+            answerImageData: aImageData,
+            questionDoodleData: qDoodleData,
+            answerDoodleData: aDoodleData
         )
         if let eid = existingID { card.id = eid }
         onSave(card)
         dismiss()
     }
 
-    func loadPhoto(_ item: PhotosPickerItem?) {
+    func loadPhoto(_ item: PhotosPickerItem?, into binding: Binding<Data?>) {
         guard let item = item else { return }
         Task {
             if let data = try? await item.loadTransferable(type: Data.self),
                let compressed = compressImage(data) {
-                await MainActor.run { imageData = compressed }
+                await MainActor.run { binding.wrappedValue = compressed }
             }
         }
     }
@@ -1537,18 +1658,15 @@ struct SearchView: View {
             } else {
                 List {
                     ForEach(results, id: \.1.id) { deck, card in
-                        Button { viewingCard = SearchCardItem(deck: deck, card: card) } label: {
+                        Button { jumpToCard(deck: deck, card: card) } label: {
                             SearchResultRow(deckName: deck.name, card: card)
                         }
                         .contextMenu {
                             Button { viewingCard = SearchCardItem(deck: deck, card: card) } label: {
-                                Label("Preview", systemImage: "eye")
+                                Label("Quick Preview", systemImage: "eye")
                             }
                             Button { editingCard = SearchEditItem(deckID: deck.id, card: card) } label: {
                                 Label("Edit", systemImage: "pencil")
-                            }
-                            Button { jumpToCard(deck: deck, card: card) } label: {
-                                Label("Jump to Card", systemImage: "arrow.right.circle")
                             }
                             Button(role: .destructive) {
                                 deletingCard = SearchEditItem(deckID: deck.id, card: card)
@@ -1686,8 +1804,9 @@ struct SettingsView: View {
     var body: some View {
         NavigationStack {
             Form {
+                toolbarSection
                 Section {
-                    Text("These settings apply to cards without custom formatting. Use the formatting toolbar in the card editor for per-card styling.")
+                    Text("These apply to cards without per-card formatting.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 fontSection
@@ -1695,10 +1814,79 @@ struct SettingsView: View {
                 answerSection
                 previewSection
             }
-            .navigationTitle("Default Appearance")
+            .navigationTitle("Settings")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .topBarLeading) { Button("Done") { dismiss() } } }
         }
+    }
+
+    // MARK: Toolbar Customization
+    var toolbarSection: some View {
+        Section {
+            VStack(alignment: .leading, spacing: 12) {
+                Text("In Toolbar").font(.caption.bold()).foregroundStyle(.secondary)
+                if store.settings.toolbarActions.isEmpty {
+                    Text("No actions pinned").font(.caption).foregroundStyle(.tertiary)
+                } else {
+                    ForEach(store.settings.toolbarActions, id: \.self) { id in
+                        if let action = AppSettings.allActions.first(where: { $0.id == id }) {
+                            HStack(spacing: 10) {
+                                Image(systemName: action.icon).frame(width: 22)
+                                    .foregroundStyle(CuteTheme.accent)
+                                Text(action.label).font(.subheadline)
+                                Spacer()
+                                Button { removeFromToolbar(id) } label: {
+                                    Image(systemName: "minus.circle.fill").foregroundStyle(.red.opacity(0.7))
+                                }
+                            }
+                            .padding(.vertical, 2)
+                        }
+                    }
+                    .onMove { from, to in
+                        store.settings.toolbarActions.move(fromOffsets: from, toOffset: to)
+                    }
+                }
+
+                if !availableActions.isEmpty {
+                    Divider()
+                    Text("In ⋯ Menu").font(.caption.bold()).foregroundStyle(.secondary)
+                    ForEach(availableActions, id: \.id) { action in
+                        HStack(spacing: 10) {
+                            Image(systemName: action.icon).frame(width: 22)
+                                .foregroundStyle(.secondary)
+                            Text(action.label).font(.subheadline).foregroundStyle(.secondary)
+                            Spacer()
+                            Button { addToToolbar(action.id) } label: {
+                                Image(systemName: "plus.circle.fill").foregroundStyle(CuteTheme.accent)
+                            }
+                        }
+                        .padding(.vertical, 2)
+                    }
+                }
+            }
+        } header: {
+            HStack {
+                Text("Toolbar")
+                Spacer()
+                EditButton().font(.caption)
+            }
+        } footer: {
+            Text("Tap + to pin actions to the toolbar. Tap − to move back to menu. Drag to reorder.")
+        }
+    }
+
+    var availableActions: [(id: String, label: String, icon: String)] {
+        AppSettings.allActions.filter { !store.settings.toolbarActions.contains($0.id) }
+    }
+
+    func addToToolbar(_ id: String) {
+        if store.settings.toolbarActions.count < 5 && !store.settings.toolbarActions.contains(id) {
+            withAnimation { store.settings.toolbarActions.append(id) }
+        }
+    }
+
+    func removeFromToolbar(_ id: String) {
+        withAnimation { store.settings.toolbarActions.removeAll { $0 == id } }
     }
 
     var fontSection: some View {
