@@ -37,7 +37,8 @@ struct AppSettings: Codable, Equatable {
     var answerFontSize: CGFloat = 26
     var questionColor: CodableColor = .darkGray
     var answerColor: CodableColor = .white
-    var toolbarActions: [String] = ["search", "edit", "add"] // Pinned to top bar
+    var toolbarActions: [String] = ["search", "edit", "add"]
+    var backgroundTheme: String = "blush"
 
     var resolvedDesign: Font.Design {
         switch fontDesign {
@@ -55,7 +56,49 @@ struct AppSettings: Codable, Equatable {
         ("filter", "Filter Tags", "tag"),
         ("list", "All Cards", "list.bullet.rectangle"),
         ("add", "Add Card", "plus.circle.fill"),
+        ("export", "Export", "square.and.arrow.up"),
+        ("settings", "Settings", "gearshape"),
+        ("delete", "Delete Card", "trash"),
     ]
+
+    // Custom decoder to handle missing keys from older saved data
+    enum CodingKeys: String, CodingKey {
+        case fontDesign, questionFontSize, answerFontSize, questionColor, answerColor, toolbarActions, backgroundTheme
+    }
+
+    init() {}
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        fontDesign = (try? c.decode(String.self, forKey: .fontDesign)) ?? "rounded"
+        questionFontSize = (try? c.decode(CGFloat.self, forKey: .questionFontSize)) ?? 22
+        answerFontSize = (try? c.decode(CGFloat.self, forKey: .answerFontSize)) ?? 26
+        questionColor = (try? c.decode(CodableColor.self, forKey: .questionColor)) ?? .darkGray
+        answerColor = (try? c.decode(CodableColor.self, forKey: .answerColor)) ?? .white
+        toolbarActions = (try? c.decode([String].self, forKey: .toolbarActions)) ?? ["search", "edit", "add"]
+        backgroundTheme = (try? c.decode(String.self, forKey: .backgroundTheme)) ?? "blush"
+    }
+}
+
+struct BGTheme {
+    let id: String
+    let name: String
+    let colors: [Color]
+
+    static let all: [BGTheme] = [
+        BGTheme(id: "blush", name: "Blush", colors: [CuteTheme.softPink, CuteTheme.cream, CuteTheme.sky.opacity(0.5)]),
+        BGTheme(id: "sunset", name: "Sunset", colors: [Color(red: 1.0, green: 0.92, blue: 0.88), Color(red: 0.98, green: 0.86, blue: 0.82), Color(red: 0.94, green: 0.82, blue: 0.88)]),
+        BGTheme(id: "ocean", name: "Ocean", colors: [Color(red: 0.88, green: 0.94, blue: 0.98), Color(red: 0.82, green: 0.90, blue: 0.96), Color(red: 0.90, green: 0.94, blue: 0.98)]),
+        BGTheme(id: "lavender", name: "Lavender", colors: [Color(red: 0.94, green: 0.90, blue: 0.98), Color(red: 0.96, green: 0.93, blue: 0.99), Color(red: 0.92, green: 0.90, blue: 0.97)]),
+        BGTheme(id: "mint", name: "Mint", colors: [Color(red: 0.90, green: 0.97, blue: 0.93), Color(red: 0.93, green: 0.98, blue: 0.94), Color(red: 0.88, green: 0.96, blue: 0.94)]),
+        BGTheme(id: "peach", name: "Peach", colors: [Color(red: 0.99, green: 0.93, blue: 0.88), Color(red: 1.0, green: 0.95, blue: 0.90), Color(red: 0.98, green: 0.92, blue: 0.86)]),
+        BGTheme(id: "snow", name: "Snow", colors: [Color(red: 0.96, green: 0.96, blue: 0.97), Color(red: 0.98, green: 0.98, blue: 0.99), Color(red: 0.95, green: 0.95, blue: 0.96)]),
+        BGTheme(id: "midnight", name: "Midnight", colors: [Color(red: 0.12, green: 0.12, blue: 0.16), Color(red: 0.16, green: 0.14, blue: 0.20), Color(red: 0.10, green: 0.10, blue: 0.14)]),
+    ]
+
+    static func colors(for id: String) -> [Color] {
+        all.first { $0.id == id }?.colors ?? all[0].colors
+    }
 }
 
 struct Flashcard: Identifiable, Codable {
@@ -551,9 +594,10 @@ struct FlashcardApp: App {
 // ============================================================
 
 struct AppBG: View {
+    @EnvironmentObject var store: DataStore
     var body: some View {
         LinearGradient(
-            colors: [CuteTheme.softPink, CuteTheme.cream, CuteTheme.sky.opacity(0.5)],
+            colors: BGTheme.colors(for: store.settings.backgroundTheme),
             startPoint: .topLeading, endPoint: .bottomTrailing
         ).ignoresSafeArea()
     }
@@ -915,6 +959,9 @@ struct DeckView: View {
         case "filter": showTagFilter = true
         case "list": showCardList = true
         case "add": showAddCard = true
+        case "export": showExport = true
+        case "settings": showSettings = true
+        case "delete": showDeleteAlert = true
         default: break
         }
     }
@@ -930,33 +977,31 @@ struct DeckView: View {
 
     @ToolbarContentBuilder
     var deckToolbar: some ToolbarContent {
-        ToolbarItemGroup(placement: .topBarTrailing) {
-            ForEach(pinnedActions, id: \.self) { id in
-                if id == "add" {
-                    Button { toolbarAction(id) } label: {
-                        Image(systemName: iconFor(id)).font(.title3)
-                    }.tint(CuteTheme.accent)
-                } else {
+        ToolbarItem(placement: .topBarTrailing) {
+            HStack(spacing: 14) {
+                ForEach(pinnedActions, id: \.self) { id in
                     Button { toolbarAction(id) } label: {
                         Image(systemName: iconFor(id))
+                            .font(id == "add" ? .title3 : .body)
+                            .foregroundStyle(id == "add" ? CuteTheme.accent : .primary)
                     }
                 }
-            }
-            Menu {
-                // Overflow actions not pinned
-                ForEach(overflowActions, id: \.self) { id in
-                    if let action = AppSettings.allActions.first(where: { $0.id == id }) {
-                        Button { toolbarAction(id) } label: {
-                            Label(action.label, systemImage: action.icon)
+                Menu {
+                    ForEach(overflowActions, id: \.self) { id in
+                        if let action = AppSettings.allActions.first(where: { $0.id == id }) {
+                            if id == "delete" {
+                                Button(role: .destructive) { toolbarAction(id) } label: {
+                                    Label(action.label, systemImage: action.icon)
+                                }
+                            } else {
+                                Button { toolbarAction(id) } label: {
+                                    Label(action.label, systemImage: action.icon)
+                                }
+                            }
                         }
                     }
-                }
-                Divider()
-                Button { showExport = true } label: { Label("Export", systemImage: "square.and.arrow.up") }
-                Button { showSettings = true } label: { Label("Settings", systemImage: "gearshape") }
-                Divider()
-                Button(role: .destructive) { showDeleteAlert = true } label: { Label("Delete Card", systemImage: "trash") }
-            } label: { Image(systemName: "ellipsis.circle") }
+                } label: { Image(systemName: "ellipsis.circle") }
+            }
         }
     }
 
@@ -1822,6 +1867,7 @@ struct SettingsView: View {
     var body: some View {
         NavigationStack {
             Form {
+                backgroundSection
                 toolbarSection
                 Section {
                     Text("These apply to cards without per-card formatting.")
@@ -1838,48 +1884,63 @@ struct SettingsView: View {
         }
     }
 
+    // MARK: Background Theme
+    var backgroundSection: some View {
+        Section("Background") {
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 12) {
+                    ForEach(BGTheme.all, id: \.id) { bg in
+                        let isSelected = store.settings.backgroundTheme == bg.id
+                        VStack(spacing: 5) {
+                            RoundedRectangle(cornerRadius: 10)
+                                .fill(LinearGradient(colors: bg.colors, startPoint: .topLeading, endPoint: .bottomTrailing))
+                                .frame(width: 62, height: 50)
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 10)
+                                        .strokeBorder(isSelected ? CuteTheme.accent : Color.gray.opacity(0.2), lineWidth: isSelected ? 2.5 : 1)
+                                )
+                                .shadow(color: isSelected ? CuteTheme.accent.opacity(0.3) : .clear, radius: 4, y: 2)
+                            Text(bg.name)
+                                .font(.caption2.weight(.medium))
+                                .foregroundStyle(isSelected ? CuteTheme.accent : CuteTheme.subtle)
+                        }
+                        .onTapGesture {
+                            store.settings.backgroundTheme = bg.id
+                        }
+                    }
+                }
+                .padding(.vertical, 6)
+            }
+        }
+    }
+
     // MARK: Toolbar Customization
     var toolbarSection: some View {
         Section {
-            VStack(alignment: .leading, spacing: 12) {
-                Text("In Toolbar").font(.caption.bold()).foregroundStyle(.secondary)
-                if store.settings.toolbarActions.isEmpty {
-                    Text("No actions pinned").font(.caption).foregroundStyle(.tertiary)
-                } else {
-                    ForEach(store.settings.toolbarActions, id: \.self) { id in
-                        if let action = AppSettings.allActions.first(where: { $0.id == id }) {
-                            HStack(spacing: 10) {
-                                Image(systemName: action.icon).frame(width: 22)
-                                    .foregroundStyle(CuteTheme.accent)
-                                Text(action.label).font(.subheadline)
-                                Spacer()
-                                Button { removeFromToolbar(id) } label: {
-                                    Image(systemName: "minus.circle.fill").foregroundStyle(.red.opacity(0.7))
-                                }
-                            }
-                            .padding(.vertical, 2)
-                        }
-                    }
-                    .onMove { from, to in
-                        store.settings.toolbarActions.move(fromOffsets: from, toOffset: to)
+            ForEach(store.settings.toolbarActions, id: \.self) { id in
+                if let action = AppSettings.allActions.first(where: { $0.id == id }) {
+                    HStack(spacing: 10) {
+                        Image(systemName: "minus.circle.fill").foregroundStyle(.red.opacity(0.7))
+                            .onTapGesture { removeFromToolbar(id) }
+                        Image(systemName: action.icon).frame(width: 22)
+                            .foregroundStyle(CuteTheme.accent)
+                        Text(action.label).font(.subheadline)
+                        Spacer()
                     }
                 }
+            }
+            .onMove { from, to in
+                store.settings.toolbarActions.move(fromOffsets: from, toOffset: to)
+            }
 
-                if !availableActions.isEmpty {
-                    Divider()
-                    Text("In ⋯ Menu").font(.caption.bold()).foregroundStyle(.secondary)
-                    ForEach(availableActions, id: \.id) { action in
-                        HStack(spacing: 10) {
-                            Image(systemName: action.icon).frame(width: 22)
-                                .foregroundStyle(.secondary)
-                            Text(action.label).font(.subheadline).foregroundStyle(.secondary)
-                            Spacer()
-                            Button { addToToolbar(action.id) } label: {
-                                Image(systemName: "plus.circle.fill").foregroundStyle(CuteTheme.accent)
-                            }
-                        }
-                        .padding(.vertical, 2)
-                    }
+            ForEach(availableActions, id: \.id) { action in
+                HStack(spacing: 10) {
+                    Image(systemName: "plus.circle.fill").foregroundStyle(CuteTheme.accent)
+                        .onTapGesture { addToToolbar(action.id) }
+                    Image(systemName: action.icon).frame(width: 22)
+                        .foregroundStyle(.secondary)
+                    Text(action.label).font(.subheadline).foregroundStyle(.secondary)
+                    Spacer()
                 }
             }
         } header: {
