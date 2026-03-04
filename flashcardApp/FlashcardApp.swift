@@ -1,8 +1,31 @@
 import SwiftUI
 import Combine
+import UniformTypeIdentifiers
+
+#if canImport(UIKit)
+import UIKit
 import PencilKit
 import PhotosUI
-import UniformTypeIdentifiers
+#endif
+
+#if canImport(AppKit)
+import AppKit
+#endif
+
+// ============================================================
+// MARK: - Platform Abstractions
+// ============================================================
+
+#if canImport(UIKit)
+typealias PlatformColor = UIColor
+typealias PlatformImage = UIImage
+typealias PlatformFont = UIFont
+#elseif canImport(AppKit)
+typealias PlatformColor = NSColor
+typealias PlatformImage = NSImage
+typealias PlatformFont = NSFont
+#endif
+
 
 // ============================================================
 // MARK: - Data Models
@@ -24,9 +47,14 @@ struct CodableColor: Codable, Equatable {
     }
 
     init(color: Color) {
-        let c = UIColor(color)
+        let c = PlatformColor(color)
         var r: CGFloat = 0; var g: CGFloat = 0; var b: CGFloat = 0; var a: CGFloat = 0
+        #if canImport(UIKit)
         c.getRed(&r, green: &g, blue: &b, alpha: &a)
+        #elseif canImport(AppKit)
+        let converted = c.usingColorSpace(.sRGB) ?? c
+        r = converted.redComponent; g = converted.greenComponent; b = converted.blueComponent; a = converted.alphaComponent
+        #endif
         self.red = Double(r); self.green = Double(g); self.blue = Double(b); self.alpha = Double(a)
     }
 }
@@ -39,6 +67,7 @@ struct AppSettings: Codable, Equatable {
     var answerColor: CodableColor = .white
     var toolbarActions: [String] = ["search", "edit", "add"]
     var backgroundTheme: String = "blush"
+    var iCloudSync: Bool = false
 
     var resolvedDesign: Font.Design {
         switch fontDesign {
@@ -61,9 +90,8 @@ struct AppSettings: Codable, Equatable {
         ("delete", "Delete Card", "trash"),
     ]
 
-    // Custom decoder to handle missing keys from older saved data
     enum CodingKeys: String, CodingKey {
-        case fontDesign, questionFontSize, answerFontSize, questionColor, answerColor, toolbarActions, backgroundTheme
+        case fontDesign, questionFontSize, answerFontSize, questionColor, answerColor, toolbarActions, backgroundTheme, iCloudSync
     }
 
     init() {}
@@ -77,6 +105,7 @@ struct AppSettings: Codable, Equatable {
         answerColor = (try? c.decode(CodableColor.self, forKey: .answerColor)) ?? .white
         toolbarActions = (try? c.decode([String].self, forKey: .toolbarActions)) ?? ["search", "edit", "add"]
         backgroundTheme = (try? c.decode(String.self, forKey: .backgroundTheme)) ?? "blush"
+        iCloudSync = (try? c.decode(Bool.self, forKey: .iCloudSync)) ?? false
     }
 }
 
@@ -99,6 +128,29 @@ struct BGTheme {
     static func colors(for id: String) -> [Color] {
         all.first { $0.id == id }?.colors ?? all[0].colors
     }
+
+    static func isDark(_ id: String) -> Bool {
+        id == "midnight"
+    }
+}
+
+// Theme-aware colors that adapt to light/dark backgrounds
+struct ThemeColors {
+    let settings: AppSettings
+
+    var isDark: Bool { BGTheme.isDark(settings.backgroundTheme) }
+
+    var primaryText: Color { isDark ? .white : .primary }
+    var secondaryText: Color { isDark ? .white.opacity(0.7) : CuteTheme.subtle }
+    var deckRowBG: Color { isDark ? .white.opacity(0.1) : .white.opacity(0.9) }
+    var deckRowShadow: Color { isDark ? .clear : CuteTheme.pink.opacity(0.15) }
+    var accentText: Color { isDark ? CuteTheme.pink : CuteTheme.accent.opacity(0.7) }
+    var chevron: Color { isDark ? .white.opacity(0.3) : .gray.opacity(0.3) }
+    var cardCount: Color { isDark ? .white.opacity(0.5) : CuteTheme.subtle.opacity(0.7) }
+    var emptyText: Color { isDark ? .white.opacity(0.6) : CuteTheme.subtle }
+    var dotInactive: Color { isDark ? .white.opacity(0.3) : CuteTheme.pink.opacity(0.45) }
+    var dotOverflow: Color { isDark ? .white.opacity(0.2) : CuteTheme.pink.opacity(0.3) }
+    var filterBarText: Color { isDark ? CuteTheme.pink : CuteTheme.accent }
 }
 
 struct Flashcard: Identifiable, Codable {
@@ -132,7 +184,6 @@ struct Flashcard: Identifiable, Codable {
         case questionImageData, answerImageData
         case questionDoodleData, answerDoodleData
         case createdAt
-        // Legacy keys
         case imageData, doodleData
     }
 
@@ -159,7 +210,6 @@ struct Flashcard: Identifiable, Codable {
         answerRTF = try c.decodeIfPresent(Data.self, forKey: .answerRTF)
         notesRTF = try c.decodeIfPresent(Data.self, forKey: .notesRTF)
         createdAt = try c.decodeIfPresent(Date.self, forKey: .createdAt) ?? Date()
-        // Try new keys first, fall back to legacy
         questionImageData = try c.decodeIfPresent(Data.self, forKey: .questionImageData) ?? c.decodeIfPresent(Data.self, forKey: .imageData)
         answerImageData = try c.decodeIfPresent(Data.self, forKey: .answerImageData)
         questionDoodleData = try c.decodeIfPresent(Data.self, forKey: .questionDoodleData) ?? c.decodeIfPresent(Data.self, forKey: .doodleData)
@@ -191,49 +241,63 @@ struct Deck: Identifiable, Codable {
     var createdAt: Date = Date()
 }
 
+
 // ============================================================
-// MARK: - Data Store
+// MARK: - Data Store (with iCloud Sync)
 // ============================================================
 
 class DataStore: ObservableObject {
     @Published var decks: [Deck] = [] { didSet { save() } }
-    @Published var appTitle: String = "🌸 Flashcards" { didSet { UserDefaults.standard.set(appTitle, forKey: "app_title") } }
+    @Published var appTitle: String = "\u{1F338} Flashcards" { didSet { UserDefaults.standard.set(appTitle, forKey: "app_title") } }
     @Published var settings: AppSettings = AppSettings() { didSet { saveSettings() } }
     @Published var pendingDeckNav: UUID? = nil
     @Published var pendingCardID: UUID? = nil
 
     private let decksKey = "saved_decks_v3"
+    private var iCloudObserver: NSObjectProtocol? = nil
 
     init() {
         if let t = UserDefaults.standard.string(forKey: "app_title") { appTitle = t }
         loadSettings()
         loadDecks()
         if decks.isEmpty { createSampleDeck() }
+        setupICloudObserver()
+    }
+
+    deinit {
+        if let obs = iCloudObserver { NotificationCenter.default.removeObserver(obs) }
     }
 
     func createSampleDeck() {
         let cards: [Flashcard] = [
             Flashcard(question: "What is the capital of Japan?", answer: "Tokyo", notes: "Tokyo is the most populous metropolitan area in the world with over 37 million people.", tags: ["geography", "asia"]),
-            Flashcard(question: "What is photosynthesis?", answer: "The process plants use to convert sunlight into energy", notes: "6CO₂ + 6H₂O → C₆H₁₂O₆ + 6O₂", tags: ["science", "biology"]),
-            Flashcard(question: "Who wrote Romeo and Juliet?", answer: "William Shakespeare", notes: "Written around 1594–1596.", tags: ["literature", "history"]),
+            Flashcard(question: "What is photosynthesis?", answer: "The process plants use to convert sunlight into energy", notes: "6CO\u{2082} + 6H\u{2082}O \u{2192} C\u{2086}H\u{2081}\u{2082}O\u{2086} + 6O\u{2082}", tags: ["science", "biology"]),
+            Flashcard(question: "Who wrote Romeo and Juliet?", answer: "William Shakespeare", notes: "Written around 1594\u{2013}1596.", tags: ["literature", "history"]),
             Flashcard(question: "What is the powerhouse of the cell?", answer: "Mitochondria", notes: "Generates most of the cell's ATP supply.", tags: ["science", "biology"]),
             Flashcard(question: "What year did World War II end?", answer: "1945", notes: "Germany in May, Japan in August after Hiroshima and Nagasaki.", tags: ["history"]),
             Flashcard(question: "Chemical symbol for gold?", answer: "Au", notes: "From Latin 'aurum'. Atomic number 79.", tags: ["science", "chemistry"]),
-            Flashcard(question: "Largest ocean on Earth?", answer: "Pacific Ocean", notes: "165.25 million km² — more than all land combined.", tags: ["geography"]),
+            Flashcard(question: "Largest ocean on Earth?", answer: "Pacific Ocean", notes: "165.25 million km\u{00B2} \u{2014} more than all land combined.", tags: ["geography"]),
             Flashcard(question: "What does CPU stand for?", answer: "Central Processing Unit", notes: "The 'brain' of the computer.", tags: ["technology"]),
-            Flashcard(question: "Pythagorean theorem?", answer: "a² + b² = c²", notes: "For right triangles only.", tags: ["math"]),
+            Flashcard(question: "Pythagorean theorem?", answer: "a\u{00B2} + b\u{00B2} = c\u{00B2}", notes: "For right triangles only.", tags: ["math"]),
             Flashcard(question: "Which planet is the Red Planet?", answer: "Mars", notes: "Red from iron oxide. Moons: Phobos and Deimos.", tags: ["science", "space"]),
         ]
         decks.append(Deck(name: "Study Starter Pack", cards: cards))
     }
 
+    // MARK: Local Persistence
     func save() {
         if let data = try? JSONEncoder().encode(decks) {
             UserDefaults.standard.set(data, forKey: decksKey)
         }
+        if settings.iCloudSync { saveToICloud() }
     }
 
     func loadDecks() {
+        // Try iCloud first if enabled
+        if settings.iCloudSync, let iCloudDecks = loadFromICloud() {
+            decks = iCloudDecks
+            return
+        }
         if let data = UserDefaults.standard.data(forKey: decksKey),
            let decoded = try? JSONDecoder().decode([Deck].self, from: data) {
             decks = decoded
@@ -244,6 +308,10 @@ class DataStore: ObservableObject {
         if let data = try? JSONEncoder().encode(settings) {
             UserDefaults.standard.set(data, forKey: "app_settings")
         }
+        if settings.iCloudSync {
+            NSUbiquitousKeyValueStore.default.set(try? JSONEncoder().encode(settings), forKey: "app_settings_cloud")
+            NSUbiquitousKeyValueStore.default.synchronize()
+        }
     }
 
     func loadSettings() {
@@ -253,14 +321,57 @@ class DataStore: ObservableObject {
         }
     }
 
-    // Deck ops
+    // MARK: iCloud Sync
+    func saveToICloud() {
+        guard let data = try? JSONEncoder().encode(decks) else { return }
+        NSUbiquitousKeyValueStore.default.set(data, forKey: "decks_cloud_v3")
+        NSUbiquitousKeyValueStore.default.synchronize()
+    }
+
+    func loadFromICloud() -> [Deck]? {
+        guard let data = NSUbiquitousKeyValueStore.default.data(forKey: "decks_cloud_v3"),
+              let decoded = try? JSONDecoder().decode([Deck].self, from: data) else { return nil }
+        return decoded
+    }
+
+    func setupICloudObserver() {
+        iCloudObserver = NotificationCenter.default.addObserver(
+            forName: NSUbiquitousKeyValueStore.didChangeExternallyNotification,
+            object: NSUbiquitousKeyValueStore.default,
+            queue: .main
+        ) { [weak self] notification in
+            guard let self = self, self.settings.iCloudSync else { return }
+            // Merge remote changes
+            if let data = NSUbiquitousKeyValueStore.default.data(forKey: "decks_cloud_v3"),
+               let remoteDecks = try? JSONDecoder().decode([Deck].self, from: data) {
+                // Simple last-write-wins: use remote if it has more total cards or decks
+                let localCount = self.decks.reduce(0) { $0 + $1.cards.count }
+                let remoteCount = remoteDecks.reduce(0) { $0 + $1.cards.count }
+                if remoteDecks.count > self.decks.count || remoteCount > localCount {
+                    self.decks = remoteDecks
+                }
+            }
+        }
+        NSUbiquitousKeyValueStore.default.synchronize()
+    }
+
+    func enableICloudSync() {
+        settings.iCloudSync = true
+        saveToICloud()
+    }
+
+    func disableICloudSync() {
+        settings.iCloudSync = false
+    }
+
+    // MARK: Deck ops
     func addDeck(_ name: String) { decks.append(Deck(name: name)) }
     func deleteDeck(id: UUID) { decks.removeAll { $0.id == id } }
     func renameDeck(id: UUID, to name: String) {
         if let i = idx(id) { decks[i].name = name }
     }
 
-    // Card ops
+    // MARK: Card ops
     func addCard(to did: UUID, card: Flashcard) {
         if let i = idx(did) { decks[i].cards.append(card) }
     }
@@ -276,6 +387,17 @@ class DataStore: ObservableObject {
         if let i = idx(did) { decks[i].cards.shuffle() }
     }
 
+    // MARK: Import
+    func importCards(to did: UUID, cards: [Flashcard]) {
+        if let i = idx(did) {
+            decks[i].cards.append(contentsOf: cards)
+        }
+    }
+
+    func importDeck(_ deck: Deck) {
+        decks.append(deck)
+    }
+
     var allTags: [String] {
         Array(Set(decks.flatMap { $0.cards.flatMap { $0.tags } })).sorted()
     }
@@ -283,20 +405,22 @@ class DataStore: ObservableObject {
     private func idx(_ did: UUID) -> Int? { decks.firstIndex(where: { $0.id == did }) }
 }
 
+
 // ============================================================
 // MARK: - Helpers
 // ============================================================
 
 struct CuteTheme {
-    static let pink = Color(red: 0.96, green: 0.72, blue: 0.76)       // warm pink
-    static let softPink = Color(red: 0.99, green: 0.93, blue: 0.94)   // blush
-    static let cream = Color(red: 0.99, green: 0.97, blue: 0.93)      // warm cream
-    static let sky = Color(red: 0.86, green: 0.90, blue: 0.98)        // periwinkle
-    static let accent = Color(red: 0.78, green: 0.42, blue: 0.56)     // berry pink
-    static let cardBG = Color(red: 1.0, green: 0.995, blue: 0.99)     // warm white
-    static let subtle = Color(red: 0.50, green: 0.44, blue: 0.48)     // warm gray
+    static let pink = Color(red: 0.96, green: 0.72, blue: 0.76)
+    static let softPink = Color(red: 0.99, green: 0.93, blue: 0.94)
+    static let cream = Color(red: 0.99, green: 0.97, blue: 0.93)
+    static let sky = Color(red: 0.86, green: 0.90, blue: 0.98)
+    static let accent = Color(red: 0.78, green: 0.42, blue: 0.56)
+    static let cardBG = Color(red: 1.0, green: 0.995, blue: 0.99)
+    static let subtle = Color(red: 0.50, green: 0.44, blue: 0.48)
 }
 
+#if canImport(UIKit)
 func compressImage(_ data: Data, maxWidth: CGFloat = 600) -> Data? {
     guard let img = UIImage(data: data) else { return nil }
     let scale = min(1.0, maxWidth / img.size.width)
@@ -307,6 +431,208 @@ func compressImage(_ data: Data, maxWidth: CGFloat = 600) -> Data? {
     UIGraphicsEndImageContext()
     return resized?.jpegData(compressionQuality: 0.6)
 }
+#elseif canImport(AppKit)
+func compressImage(_ data: Data, maxWidth: CGFloat = 600) -> Data? {
+    guard let img = NSImage(data: data) else { return nil }
+    let rep = img.representations.first
+    let w = CGFloat(rep?.pixelsWide ?? Int(img.size.width))
+    let h = CGFloat(rep?.pixelsHigh ?? Int(img.size.height))
+    let scale = min(1.0, maxWidth / w)
+    let newSize = NSSize(width: w * scale, height: h * scale)
+    let newImg = NSImage(size: newSize)
+    newImg.lockFocus()
+    img.draw(in: NSRect(origin: .zero, size: newSize))
+    newImg.unlockFocus()
+    guard let tiffData = newImg.tiffRepresentation,
+          let bitmap = NSBitmapImageRep(data: tiffData),
+          let jpeg = bitmap.representation(using: .jpeg, properties: [.compressionFactor: 0.6]) else { return nil }
+    return jpeg
+}
+#endif
+
+func hapticLight() {
+    #if canImport(UIKit)
+    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+    #endif
+}
+
+func hapticMedium() {
+    #if canImport(UIKit)
+    UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+    #endif
+}
+
+func hapticSoft() {
+    #if canImport(UIKit)
+    UIImpactFeedbackGenerator(style: .soft).impactOccurred()
+    #endif
+}
+
+// ============================================================
+// MARK: - Import Helpers
+// ============================================================
+
+func parseCSVImport(_ text: String) -> [Flashcard] {
+    var cards: [Flashcard] = []
+    let lines = text.components(separatedBy: .newlines).filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
+    guard lines.count > 1 else { return cards }
+
+    // Skip header row
+    for line in lines.dropFirst() {
+        let fields = parseCSVLine(line)
+        guard fields.count >= 2 else { continue }
+        let q = fields[0].trimmingCharacters(in: .whitespaces)
+        let a = fields[1].trimmingCharacters(in: .whitespaces)
+        guard !q.isEmpty && !a.isEmpty else { continue }
+        let notes = fields.count > 2 ? fields[2].trimmingCharacters(in: .whitespaces) : ""
+        let tags = fields.count > 3 ? fields[3].split(separator: ";").map { String($0).trimmingCharacters(in: .whitespaces).lowercased() } : []
+        cards.append(Flashcard(question: q, answer: a, notes: notes, tags: tags))
+    }
+    return cards
+}
+
+func parseCSVLine(_ line: String) -> [String] {
+    var fields: [String] = []
+    var current = ""
+    var inQuotes = false
+    var chars = line.makeIterator()
+    while let ch = chars.next() {
+        if inQuotes {
+            if ch == "\"" {
+                // Check for escaped quote
+                if let next = chars.next() {
+                    if next == "\"" { current.append("\"") }
+                    else { inQuotes = false; if next == "," { fields.append(current); current = "" } else { current.append(next) } }
+                } else { inQuotes = false }
+            } else { current.append(ch) }
+        } else {
+            if ch == "\"" { inQuotes = true }
+            else if ch == "," { fields.append(current); current = "" }
+            else { current.append(ch) }
+        }
+    }
+    fields.append(current)
+    return fields
+}
+
+func parseJSONImport(_ data: Data) -> [Flashcard]? {
+    // Try decoding as array of Flashcards
+    if let cards = try? JSONDecoder().decode([Flashcard].self, from: data) {
+        return cards
+    }
+    // Try decoding as a Deck
+    if let deck = try? JSONDecoder().decode(Deck.self, from: data) {
+        return deck.cards
+    }
+    // Try decoding as array of simple dicts
+    if let arr = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] {
+        var cards: [Flashcard] = []
+        for dict in arr {
+            guard let q = dict["question"] as? String, let a = dict["answer"] as? String else { continue }
+            let notes = dict["notes"] as? String ?? ""
+            let tags = dict["tags"] as? [String] ?? []
+            cards.append(Flashcard(question: q, answer: a, notes: notes, tags: tags))
+        }
+        return cards.isEmpty ? nil : cards
+    }
+    return nil
+}
+
+/// Parses plain text in Q:/A: format, or tab-separated format.
+///
+/// Supported formats:
+/// ```
+/// Q: What is the capital of France?
+/// A: Paris
+/// N: Optional notes
+/// T: tag1, tag2
+///
+/// Q: Next question
+/// A: Next answer
+/// ```
+/// Or tab-separated: `question[TAB]answer[TAB]notes[TAB]tags`
+func parsePlainTextImport(_ text: String) -> [Flashcard] {
+    let lines = text.components(separatedBy: .newlines)
+
+    // Detect format: if first non-empty line starts with Q: use Q/A format
+    let firstNonEmpty = lines.first(where: { !$0.trimmingCharacters(in: .whitespaces).isEmpty }) ?? ""
+    let trimmed = firstNonEmpty.trimmingCharacters(in: .whitespaces)
+
+    if trimmed.hasPrefix("Q:") || trimmed.hasPrefix("q:") {
+        return parseQAFormat(lines)
+    } else if trimmed.contains("\t") {
+        return parseTabFormat(lines)
+    } else {
+        // Try Q/A format anyway (maybe blank lines before Q:)
+        let qaCards = parseQAFormat(lines)
+        if !qaCards.isEmpty { return qaCards }
+        // Fallback: try tab format
+        return parseTabFormat(lines)
+    }
+}
+
+private func parseQAFormat(_ lines: [String]) -> [Flashcard] {
+    var cards: [Flashcard] = []
+    var currentQ = ""
+    var currentA = ""
+    var currentN = ""
+    var currentT: [String] = []
+
+    func flushCard() {
+        let q = currentQ.trimmingCharacters(in: .whitespaces)
+        let a = currentA.trimmingCharacters(in: .whitespaces)
+        if !q.isEmpty && !a.isEmpty {
+            cards.append(Flashcard(question: q, answer: a, notes: currentN.trimmingCharacters(in: .whitespaces), tags: currentT))
+        }
+        currentQ = ""; currentA = ""; currentN = ""; currentT = []
+    }
+
+    for line in lines {
+        let t = line.trimmingCharacters(in: .whitespaces)
+        if t.isEmpty {
+            // Blank line: flush if we have a card
+            if !currentQ.isEmpty { flushCard() }
+            continue
+        }
+
+        let lower = t.lowercased()
+        if lower.hasPrefix("q:") {
+            if !currentQ.isEmpty { flushCard() }
+            currentQ = String(t.dropFirst(2))
+        } else if lower.hasPrefix("a:") {
+            currentA = String(t.dropFirst(2))
+        } else if lower.hasPrefix("n:") {
+            currentN = String(t.dropFirst(2))
+        } else if lower.hasPrefix("t:") {
+            let tagStr = String(t.dropFirst(2))
+            currentT = tagStr.split(separator: ",").map { String($0).trimmingCharacters(in: .whitespaces).lowercased() }.filter { !$0.isEmpty }
+        } else {
+            // Continuation of previous field
+            if !currentA.isEmpty { currentA += " " + t }
+            else if !currentQ.isEmpty { currentQ += " " + t }
+        }
+    }
+    flushCard()
+    return cards
+}
+
+private func parseTabFormat(_ lines: [String]) -> [Flashcard] {
+    var cards: [Flashcard] = []
+    for line in lines {
+        let t = line.trimmingCharacters(in: .whitespaces)
+        if t.isEmpty { continue }
+        let fields = t.components(separatedBy: "\t")
+        guard fields.count >= 2 else { continue }
+        let q = fields[0].trimmingCharacters(in: .whitespaces)
+        let a = fields[1].trimmingCharacters(in: .whitespaces)
+        guard !q.isEmpty && !a.isEmpty else { continue }
+        let notes = fields.count > 2 ? fields[2].trimmingCharacters(in: .whitespaces) : ""
+        let tags: [String] = fields.count > 3 ? fields[3].split(separator: ";").map { String($0).trimmingCharacters(in: .whitespaces).lowercased() } : []
+        cards.append(Flashcard(question: q, answer: a, notes: notes, tags: tags))
+    }
+    return cards
+}
+
 
 // ============================================================
 // MARK: - Rich Text Helpers
@@ -327,9 +653,10 @@ func attributedToPlain(_ attr: NSAttributedString) -> String {
 }
 
 // ============================================================
-// MARK: - Rich Text Editor (UIViewRepresentable)
+// MARK: - Rich Text Editor
 // ============================================================
 
+#if canImport(UIKit)
 struct RichTextEditorView: UIViewRepresentable {
     @Binding var attributedText: NSAttributedString
     var minHeight: CGFloat = 100
@@ -539,11 +866,31 @@ extension UIFont {
         return UIFont(descriptor: desc, size: pointSize)
     }
 }
+#endif
+
+// macOS: simplified plain-text editor fallback
+#if canImport(AppKit)
+struct RichTextEditorView: View {
+    @Binding var attributedText: NSAttributedString
+    var minHeight: CGFloat = 100
+    @State private var plainText: String = ""
+
+    var body: some View {
+        TextEditor(text: $plainText)
+            .frame(minHeight: minHeight)
+            .onAppear { plainText = attributedText.string }
+            .onChange(of: plainText) { newVal in
+                attributedText = NSAttributedString(string: newVal)
+            }
+    }
+}
+#endif
 
 // ============================================================
 // MARK: - Rich Text Display
 // ============================================================
 
+#if canImport(UIKit)
 struct RichTextLabel: UIViewRepresentable {
     let attributedText: NSAttributedString
     var textColor: UIColor = .label
@@ -569,10 +916,24 @@ struct RichTextLabel: UIViewRepresentable {
             if val == nil { ms.addAttribute(.foregroundColor, value: textColor, range: r) }
         }
         uiView.attributedText = ms
-        // Ensure wrapping within parent width
         uiView.preferredMaxLayoutWidth = UIScreen.main.bounds.width - 120
     }
 }
+#endif
+
+#if canImport(AppKit)
+struct RichTextLabel: View {
+    let attributedText: NSAttributedString
+    var textColor: NSColor = .labelColor
+    var textAlignment: NSTextAlignment = .center
+
+    var body: some View {
+        Text(attributedText.string)
+            .multilineTextAlignment(.center)
+    }
+}
+#endif
+
 
 // ============================================================
 // MARK: - App Entry
@@ -583,9 +944,12 @@ struct FlashcardApp: App {
     @StateObject private var store = DataStore()
     var body: some Scene {
         WindowGroup {
-            HomeView()
+            AdaptiveHomeView()
                 .environmentObject(store)
         }
+        #if os(macOS)
+        .defaultSize(width: 900, height: 650)
+        #endif
     }
 }
 
@@ -604,7 +968,155 @@ struct AppBG: View {
 }
 
 // ============================================================
-// MARK: - Home View (Deck List Landing)
+// MARK: - Adaptive Layout (iPhone vs iPad/Mac)
+// ============================================================
+
+struct AdaptiveHomeView: View {
+    @Environment(\.horizontalSizeClass) var sizeClass
+
+    var body: some View {
+        if sizeClass == .regular {
+            iPadHomeView()
+        } else {
+            HomeView()
+        }
+    }
+}
+
+// ============================================================
+// MARK: - iPad / Mac Sidebar Layout
+// ============================================================
+
+struct iPadHomeView: View {
+    @EnvironmentObject var store: DataStore
+    @State private var selectedDeck: UUID? = nil
+    @State private var showNewDeck = false
+    @State private var newDeckName = ""
+    @State private var showSearch = false
+    @State private var showSettings = false
+    @State private var showRenameTitle = false
+    @State private var newTitle = ""
+    @State private var showImport = false
+
+    var body: some View {
+        NavigationSplitView {
+            ZStack {
+                AppBG()
+                sidebarContent
+            }
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                #if os(iOS)
+                ToolbarItem(placement: .principal) {
+                    Button { newTitle = store.appTitle; showRenameTitle = true } label: {
+                        Text(store.appTitle)
+                            .font(.title3.weight(.bold))
+                            .foregroundStyle(.primary)
+                    }
+                }
+                #endif
+                ToolbarItemGroup(placement: .primaryAction) {
+                    Button { showSearch = true } label: { Image(systemName: "magnifyingglass") }
+                    Button { showSettings = true } label: { Image(systemName: "gearshape") }
+                    Menu {
+                        Button { showNewDeck = true } label: { Label("New Deck", systemImage: "plus") }
+                        Button { showImport = true } label: { Label("Import", systemImage: "square.and.arrow.down") }
+                    } label: {
+                        Image(systemName: "plus.circle.fill").font(.title3)
+                    }.tint(CuteTheme.accent)
+                }
+            }
+            .sheet(isPresented: $showSearch) { SearchView(navPath: .constant(NavigationPath())) }
+            .sheet(isPresented: $showSettings) { SettingsView() }
+            .sheet(isPresented: $showImport) { ImportView() }
+            .alert("New Deck", isPresented: $showNewDeck) {
+                TextField("Deck name", text: $newDeckName)
+                Button("Create") {
+                    let n = newDeckName.trimmingCharacters(in: .whitespaces)
+                    if !n.isEmpty { store.addDeck(n) }
+                    newDeckName = ""
+                }
+                Button("Cancel", role: .cancel) { newDeckName = "" }
+            }
+            .alert("Rename App Title", isPresented: $showRenameTitle) {
+                TextField("Title", text: $newTitle)
+                Button("Save") {
+                    let t = newTitle.trimmingCharacters(in: .whitespaces)
+                    if !t.isEmpty { store.appTitle = t }
+                    newTitle = ""
+                }
+                Button("Cancel", role: .cancel) { newTitle = "" }
+            }
+        } detail: {
+            if let deckID = selectedDeck, store.decks.contains(where: { $0.id == deckID }) {
+                DeckView(deckID: deckID)
+            } else {
+                ZStack {
+                    AppBG()
+                    VStack(spacing: 16) {
+                        Text("\u{1F4DA}").font(.system(size: 52))
+                        Text("Select a deck").font(.title3.weight(.medium)).foregroundStyle(ThemeColors(settings: store.settings).emptyText)
+                    }
+                }
+            }
+        }
+        .onChange(of: store.pendingDeckNav) { did in
+            if let did = did {
+                selectedDeck = did
+                store.pendingDeckNav = nil
+            }
+        }
+    }
+
+    var sidebarContent: some View {
+        Group {
+            if store.decks.isEmpty {
+                VStack(spacing: 20) {
+                    HStack(spacing: -8) {
+                        Text("\u{1F42E}").font(.system(size: 40)).rotationEffect(.degrees(-10))
+                        Text("\u{1F430}").font(.system(size: 48))
+                        Text("\u{1F43C}").font(.system(size: 40)).rotationEffect(.degrees(10))
+                    }
+                    Text("No decks yet!").font(.title3.weight(.semibold)).foregroundStyle(CuteTheme.subtle)
+                    Button { showNewDeck = true } label: {
+                        HStack(spacing: 6) { Text("\u{2728}"); Text("Create First Deck").font(.subheadline.weight(.semibold)) }
+                            .foregroundStyle(.white)
+                            .padding(.horizontal, 28).padding(.vertical, 13)
+                            .background(LinearGradient(colors: [CuteTheme.pink, CuteTheme.accent], startPoint: .leading, endPoint: .trailing), in: Capsule())
+                            .shadow(color: CuteTheme.accent.opacity(0.35), radius: 10, y: 5)
+                    }
+                }
+            } else {
+                List(selection: $selectedDeck) {
+                    ForEach(store.decks) { deck in
+                        HStack(spacing: 14) {
+                            Text("\u{1F4DA}").font(.title2)
+                                .frame(width: 46, height: 46)
+                                .background(CuteTheme.pink.opacity(0.25), in: RoundedRectangle(cornerRadius: 13))
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(deck.name).font(.subheadline.weight(.semibold))
+                                Text("\(deck.cards.count) card\(deck.cards.count == 1 ? "" : "s")")
+                                    .font(.caption).foregroundStyle(.secondary)
+                            }
+                            Spacer()
+                        }
+                        .tag(deck.id)
+                        .contextMenu {
+                            Button(role: .destructive) { store.deleteDeck(id: deck.id) } label: {
+                                Label("Delete Deck", systemImage: "trash")
+                            }
+                        }
+                    }
+                }
+                .listStyle(.sidebar)
+            }
+        }
+    }
+}
+
+
+// ============================================================
+// MARK: - Home View (iPhone Stack Layout)
 // ============================================================
 
 struct HomeView: View {
@@ -616,6 +1128,7 @@ struct HomeView: View {
     @State private var showRenameTitle = false
     @State private var newTitle = ""
     @State private var navPath = NavigationPath()
+    @State private var showImport = false
 
     var body: some View {
         NavigationStack(path: $navPath) {
@@ -629,6 +1142,7 @@ struct HomeView: View {
             }
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
+                #if os(iOS)
                 ToolbarItem(placement: .principal) {
                     Button { newTitle = store.appTitle; showRenameTitle = true } label: {
                         Text(store.appTitle)
@@ -636,6 +1150,7 @@ struct HomeView: View {
                             .foregroundStyle(.primary)
                     }
                 }
+                #endif
             }
             .toolbar { homeToolbar }
             .navigationDestination(for: UUID.self) { deckID in
@@ -643,6 +1158,7 @@ struct HomeView: View {
             }
             .sheet(isPresented: $showSearch) { SearchView(navPath: $navPath) }
             .sheet(isPresented: $showSettings) { SettingsView() }
+            .sheet(isPresented: $showImport) { ImportView() }
             .alert("New Deck", isPresented: $showNewDeck) {
                 TextField("Deck name", text: $newDeckName)
                 Button("Create") {
@@ -676,13 +1192,13 @@ struct HomeView: View {
     var emptyView: some View {
         VStack(spacing: 20) {
             HStack(spacing: -8) {
-                Text("🐮").font(.system(size: 40)).rotationEffect(.degrees(-10))
-                Text("🐰").font(.system(size: 48))
-                Text("🐼").font(.system(size: 40)).rotationEffect(.degrees(10))
+                Text("\u{1F42E}").font(.system(size: 40)).rotationEffect(.degrees(-10))
+                Text("\u{1F430}").font(.system(size: 48))
+                Text("\u{1F43C}").font(.system(size: 40)).rotationEffect(.degrees(10))
             }
             Text("No decks yet!").font(.title3.weight(.semibold)).foregroundStyle(CuteTheme.subtle)
             Button { showNewDeck = true } label: {
-                HStack(spacing: 6) { Text("✨"); Text("Create First Deck").font(.subheadline.weight(.semibold)) }
+                HStack(spacing: 6) { Text("\u{2728}"); Text("Create First Deck").font(.subheadline.weight(.semibold)) }
                     .foregroundStyle(.white)
                     .padding(.horizontal, 28).padding(.vertical, 13)
                     .background(LinearGradient(colors: [CuteTheme.pink, CuteTheme.accent], startPoint: .leading, endPoint: .trailing), in: Capsule())
@@ -710,34 +1226,39 @@ struct HomeView: View {
     }
 
     func deckRow(_ deck: Deck) -> some View {
-        HStack(spacing: 14) {
-            Text("📚").font(.title2)
+        let tc = ThemeColors(settings: store.settings)
+        return HStack(spacing: 14) {
+            Text("\u{1F4DA}").font(.title2)
                 .frame(width: 46, height: 46)
                 .background(CuteTheme.pink.opacity(0.25), in: RoundedRectangle(cornerRadius: 13))
             VStack(alignment: .leading, spacing: 3) {
-                Text(deck.name).font(.subheadline.weight(.semibold)).foregroundStyle(.primary)
+                Text(deck.name).font(.subheadline.weight(.semibold)).foregroundStyle(tc.primaryText)
                 Text("\(deck.cards.count) card\(deck.cards.count == 1 ? "" : "s")")
-                    .font(.caption).foregroundStyle(CuteTheme.subtle.opacity(0.7))
+                    .font(.caption).foregroundStyle(tc.cardCount)
             }
             Spacer()
-            Image(systemName: "chevron.right").font(.caption2.bold()).foregroundStyle(.quaternary)
+            Image(systemName: "chevron.right").font(.caption2.bold()).foregroundStyle(tc.chevron)
         }
         .padding(14)
-        .background(.white.opacity(0.9), in: RoundedRectangle(cornerRadius: 16))
-        .shadow(color: CuteTheme.pink.opacity(0.15), radius: 8, y: 4)
+        .background(tc.deckRowBG, in: RoundedRectangle(cornerRadius: 16))
+        .shadow(color: tc.deckRowShadow, radius: 8, y: 4)
     }
 
     @ToolbarContentBuilder
     var homeToolbar: some ToolbarContent {
-        ToolbarItemGroup(placement: .topBarTrailing) {
+        ToolbarItemGroup(placement: .primaryAction) {
             Button { showSearch = true } label: { Image(systemName: "magnifyingglass") }
             Button { showSettings = true } label: { Image(systemName: "gearshape") }
-            Button { showNewDeck = true } label: {
+            Menu {
+                Button { showNewDeck = true } label: { Label("New Deck", systemImage: "plus") }
+                Button { showImport = true } label: { Label("Import", systemImage: "square.and.arrow.down") }
+            } label: {
                 Image(systemName: "plus.circle.fill").font(.title3)
             }.tint(CuteTheme.accent)
         }
     }
 }
+
 
 // ============================================================
 // MARK: - Deck View
@@ -758,6 +1279,7 @@ struct DeckView: View {
     @State private var showSearch = false
     @State private var showSettings = false
     @State private var showTagFilter = false
+    @State private var showImport = false
     @State private var newDeckName = ""
     @State private var dragOffset: CGFloat = 0
     @State private var filterTags: Set<String> = []
@@ -791,12 +1313,13 @@ struct DeckView: View {
         .sheet(isPresented: $showEditCard) { editSheet }
         .sheet(isPresented: $showSearch) { SearchView(navPath: .constant(NavigationPath())) }
         .sheet(isPresented: $showSettings) { SettingsView() }
+        .sheet(isPresented: $showImport) { ImportView(targetDeckID: deckID) }
         .sheet(isPresented: $showCardList) {
             CardListView(deckID: deckID, currentIndex: $currentIndex, isFlipped: $isFlipped, showNotes: $showNotes)
         }
         .sheet(isPresented: $showExport) { ExportView(deckID: deckID) }
         .sheet(isPresented: $showTagFilter) { tagFilterSheet }
-        .alert("Delete card? 🥺", isPresented: $showDeleteAlert) {
+        .alert("Delete card? \u{1F97A}", isPresented: $showDeleteAlert) {
             Button("Delete", role: .destructive) { deleteCurrentCard() }
             Button("Cancel", role: .cancel) {}
         }
@@ -824,30 +1347,38 @@ struct DeckView: View {
 
     // MARK: Empty
     var deckEmptyView: some View {
-        VStack(spacing: 16) {
+        let tc = ThemeColors(settings: store.settings)
+        return VStack(spacing: 16) {
             Button { newDeckName = deck?.name ?? ""; showRenameDeck = true } label: {
                 Text(deck?.name ?? "Deck")
                     .font(.footnote.weight(.semibold))
-                    .foregroundStyle(CuteTheme.accent.opacity(0.7))
+                    .foregroundStyle(tc.accentText)
                     .tracking(0.3)
             }
             .padding(.top, 12)
             Spacer()
             if !filterTags.isEmpty {
-                Text("No cards match filters").font(.subheadline.weight(.medium)).foregroundStyle(CuteTheme.subtle)
+                Text("No cards match filters").font(.subheadline.weight(.medium)).foregroundStyle(tc.emptyText)
                 Button("Clear Filters") { filterTags.removeAll() }
                     .font(.subheadline.weight(.semibold))
                     .foregroundStyle(.white)
                     .padding(.horizontal, 20).padding(.vertical, 10)
                     .background(CuteTheme.accent, in: Capsule())
             } else {
-                Text("🐣").font(.system(size: 52))
-                Text("No cards yet").font(.subheadline.weight(.medium)).foregroundStyle(CuteTheme.subtle)
-                Button("Add Card") { showAddCard = true }
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 20).padding(.vertical, 10)
-                    .background(CuteTheme.accent, in: Capsule())
+                Text("\u{1F423}").font(.system(size: 52))
+                Text("No cards yet").font(.subheadline.weight(.medium)).foregroundStyle(tc.emptyText)
+                HStack(spacing: 12) {
+                    Button("Add Card") { showAddCard = true }
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 20).padding(.vertical, 10)
+                        .background(CuteTheme.accent, in: Capsule())
+                    Button("Import") { showImport = true }
+                        .font(.subheadline.weight(.semibold))
+                        .foregroundStyle(CuteTheme.accent)
+                        .padding(.horizontal, 20).padding(.vertical, 10)
+                        .background(CuteTheme.accent.opacity(0.15), in: Capsule())
+                }
             }
             Spacer()
         }
@@ -855,12 +1386,12 @@ struct DeckView: View {
 
     // MARK: Card Browser
     var cardBrowser: some View {
-        VStack(spacing: 0) {
-            // Tappable deck name
+        let tc = ThemeColors(settings: store.settings)
+        return VStack(spacing: 0) {
             Button { newDeckName = deck?.name ?? ""; showRenameDeck = true } label: {
                 Text(deck?.name ?? "Deck")
                     .font(.footnote.weight(.semibold))
-                    .foregroundStyle(CuteTheme.accent.opacity(0.7))
+                    .foregroundStyle(tc.accentText)
                     .tracking(0.3)
             }
             .padding(.top, 12).padding(.bottom, 6)
@@ -896,11 +1427,12 @@ struct DeckView: View {
     }
 
     var activeFilterBar: some View {
-        HStack {
+        let tc = ThemeColors(settings: store.settings)
+        return HStack {
             Image(systemName: "line.3.horizontal.decrease.circle.fill")
-                .foregroundStyle(CuteTheme.accent).font(.caption)
+                .foregroundStyle(tc.filterBarText).font(.caption)
             Text("\(filterTags.count) tag\(filterTags.count == 1 ? "" : "s") active")
-                .font(.caption2.weight(.medium)).foregroundStyle(CuteTheme.accent)
+                .font(.caption2.weight(.medium)).foregroundStyle(tc.filterBarText)
             Spacer()
             Button("Clear") { filterTags.removeAll() }
                 .font(.caption2.weight(.medium)).foregroundStyle(.red.opacity(0.6))
@@ -935,10 +1467,10 @@ struct DeckView: View {
             .navigationTitle("Filter by Tags")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .topBarLeading) {
+                ToolbarItem(placement: .cancellationAction) {
                     Button("Done") { showTagFilter = false }
                 }
-                ToolbarItem(placement: .topBarTrailing) {
+                ToolbarItem(placement: .primaryAction) {
                     if !filterTags.isEmpty {
                         Button("Clear All") { filterTags.removeAll() }
                     }
@@ -955,7 +1487,7 @@ struct DeckView: View {
         case "shuffle":
             store.shuffleDeck(deckID)
             currentIndex = 0; isFlipped = false; showNotes = false
-            UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+            hapticMedium()
         case "filter": showTagFilter = true
         case "list": showCardList = true
         case "add": showAddCard = true
@@ -977,13 +1509,13 @@ struct DeckView: View {
 
     @ToolbarContentBuilder
     var deckToolbar: some ToolbarContent {
-        ToolbarItem(placement: .topBarTrailing) {
+        ToolbarItem(placement: .primaryAction) {
             HStack(spacing: 14) {
                 ForEach(pinnedActions, id: \.self) { id in
                     Button { toolbarAction(id) } label: {
                         Image(systemName: iconFor(id))
                             .font(id == "add" ? .title3 : .body)
-                            .foregroundStyle(id == "add" ? CuteTheme.accent : .primary)
+                            .foregroundStyle(id == "add" ? CuteTheme.accent : id == "delete" ? .red.opacity(0.7) : .primary)
                     }
                 }
                 Menu {
@@ -1000,6 +1532,8 @@ struct DeckView: View {
                             }
                         }
                     }
+                    Divider()
+                    Button { showImport = true } label: { Label("Import", systemImage: "square.and.arrow.down") }
                 } label: { Image(systemName: "ellipsis.circle") }
             }
         }
@@ -1030,10 +1564,10 @@ struct DeckView: View {
                 let th: CGFloat = 60
                 if v.translation.width < -th && safeIndex < filteredCards.count - 1 {
                     withAnimation(.spring(response: 0.35)) { dragOffset = 0; isFlipped = false; showNotes = false; currentIndex = safeIndex + 1 }
-                    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                    hapticLight()
                 } else if v.translation.width > th && safeIndex > 0 {
                     withAnimation(.spring(response: 0.35)) { dragOffset = 0; isFlipped = false; showNotes = false; currentIndex = safeIndex - 1 }
-                    UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                    hapticLight()
                 } else {
                     withAnimation(.spring(response: 0.3)) { dragOffset = 0 }
                 }
@@ -1048,6 +1582,7 @@ struct DeckView: View {
     }
 }
 
+
 // ============================================================
 // MARK: - Flashcard View (Expansive, Centered)
 // ============================================================
@@ -1060,11 +1595,11 @@ struct FlashcardView: View {
     let settings: AppSettings
 
     private let colorPairs: [(Color, Color)] = [
-        (Color(red: 0.92, green: 0.56, blue: 0.62), Color(red: 0.82, green: 0.42, blue: 0.52)),  // rose
-        (Color(red: 0.58, green: 0.66, blue: 0.92), Color(red: 0.45, green: 0.52, blue: 0.82)),  // periwinkle
-        (Color(red: 0.55, green: 0.80, blue: 0.68), Color(red: 0.40, green: 0.68, blue: 0.55)),  // mint
-        (Color(red: 0.90, green: 0.68, blue: 0.50), Color(red: 0.80, green: 0.55, blue: 0.40)),  // peach
-        (Color(red: 0.74, green: 0.60, blue: 0.88), Color(red: 0.60, green: 0.44, blue: 0.76)),  // lavender
+        (Color(red: 0.92, green: 0.56, blue: 0.62), Color(red: 0.82, green: 0.42, blue: 0.52)),
+        (Color(red: 0.58, green: 0.66, blue: 0.92), Color(red: 0.45, green: 0.52, blue: 0.82)),
+        (Color(red: 0.55, green: 0.80, blue: 0.68), Color(red: 0.40, green: 0.68, blue: 0.55)),
+        (Color(red: 0.90, green: 0.68, blue: 0.50), Color(red: 0.80, green: 0.55, blue: 0.40)),
+        (Color(red: 0.74, green: 0.60, blue: 0.88), Color(red: 0.60, green: 0.44, blue: 0.76)),
     ]
 
     var body: some View {
@@ -1080,11 +1615,10 @@ struct FlashcardView: View {
                 isFlipped.toggle()
                 showNotes = false
             }
-            UIImpactFeedbackGenerator(style: .soft).impactOccurred()
+            hapticSoft()
         }
     }
 
-    // MARK: Question Side
     var questionSide: some View {
         RoundedRectangle(cornerRadius: 24)
             .fill(CuteTheme.cardBG)
@@ -1099,15 +1633,16 @@ struct FlashcardView: View {
             ScrollView {
                 VStack(spacing: 16) {
                     Text("QUESTION").font(.system(size: 10, weight: .medium)).tracking(2.5).foregroundStyle(CuteTheme.subtle.opacity(0.35))
+                    #if canImport(UIKit)
                     if let rtf = rtfToAttributed(card.questionRTF), rtf.length > 0 {
                         RichTextLabel(attributedText: rtf, textColor: UIColor(settings.questionColor.color))
                             .fixedSize(horizontal: false, vertical: true)
                     } else {
-                        Text(card.question)
-                            .font(.system(size: settings.questionFontSize, weight: .bold, design: settings.resolvedDesign))
-                            .multilineTextAlignment(.center)
-                            .foregroundStyle(settings.questionColor.color)
+                        questionPlainText
                     }
+                    #else
+                    questionPlainText
+                    #endif
                     mediaBlock(imageData: card.questionImageData, doodleData: card.questionDoodleData)
                 }
                 .frame(maxWidth: .infinity)
@@ -1118,7 +1653,13 @@ struct FlashcardView: View {
         .clipShape(RoundedRectangle(cornerRadius: 24))
     }
 
-    // MARK: Answer Side
+    var questionPlainText: some View {
+        Text(card.question)
+            .font(.system(size: settings.questionFontSize, weight: .bold, design: settings.resolvedDesign))
+            .multilineTextAlignment(.center)
+            .foregroundStyle(settings.questionColor.color)
+    }
+
     func answerSide(_ cp: (Color, Color)) -> some View {
         RoundedRectangle(cornerRadius: 24)
             .fill(LinearGradient(colors: [cp.0, cp.1], startPoint: .topLeading, endPoint: .bottomTrailing))
@@ -1133,15 +1674,16 @@ struct FlashcardView: View {
             ScrollView {
                 VStack(spacing: 16) {
                     Text("ANSWER").font(.system(size: 10, weight: .medium)).tracking(2.5).foregroundStyle(.white.opacity(0.35))
+                    #if canImport(UIKit)
                     if let rtf = rtfToAttributed(card.answerRTF), rtf.length > 0 {
                         RichTextLabel(attributedText: rtf, textColor: UIColor(settings.answerColor.color))
                             .fixedSize(horizontal: false, vertical: true)
                     } else {
-                        Text(card.answer)
-                            .font(.system(size: settings.answerFontSize, weight: .bold, design: settings.resolvedDesign))
-                            .multilineTextAlignment(.center)
-                            .foregroundStyle(settings.answerColor.color)
+                        answerPlainText
                     }
+                    #else
+                    answerPlainText
+                    #endif
                     mediaBlock(imageData: card.answerImageData, doodleData: card.answerDoodleData)
                     notesSection
                 }
@@ -1153,9 +1695,16 @@ struct FlashcardView: View {
         .clipShape(RoundedRectangle(cornerRadius: 24))
     }
 
-    // MARK: Media Block
+    var answerPlainText: some View {
+        Text(card.answer)
+            .font(.system(size: settings.answerFontSize, weight: .bold, design: settings.resolvedDesign))
+            .multilineTextAlignment(.center)
+            .foregroundStyle(settings.answerColor.color)
+    }
+
     func mediaBlock(imageData: Data?, doodleData: Data?) -> some View {
         VStack(spacing: 8) {
+            #if canImport(UIKit)
             if let data = imageData, let img = UIImage(data: data) {
                 Image(uiImage: img)
                     .resizable().scaledToFit()
@@ -1169,10 +1718,18 @@ struct FlashcardView: View {
                     .frame(maxHeight: 130)
                     .background(Color.white.opacity(0.12), in: RoundedRectangle(cornerRadius: 12))
             }
+            #elseif canImport(AppKit)
+            if let data = imageData, let img = NSImage(data: data) {
+                Image(nsImage: img)
+                    .resizable().scaledToFit()
+                    .frame(maxHeight: 150)
+                    .clipShape(RoundedRectangle(cornerRadius: 12))
+            }
+            // Doodle not supported on macOS
+            #endif
         }
     }
 
-    // MARK: Hidden Notes
     var notesSection: some View {
         Group {
             if !card.notes.isEmpty || card.notesRTF != nil {
@@ -1192,26 +1749,35 @@ struct FlashcardView: View {
                     }
 
                     if showNotes {
+                        #if canImport(UIKit)
                         if let rtf = rtfToAttributed(card.notesRTF), rtf.length > 0 {
                             RichTextLabel(attributedText: rtf, textColor: UIColor.white.withAlphaComponent(0.85))
                                 .fixedSize(horizontal: false, vertical: true)
                                 .frame(maxWidth: .infinity)
                                 .transition(.move(edge: .top).combined(with: .opacity))
                         } else {
-                            Text(card.notes)
-                                .font(.system(size: 14, design: settings.resolvedDesign))
-                                .multilineTextAlignment(.center)
-                                .foregroundStyle(.white.opacity(0.85))
-                                .fixedSize(horizontal: false, vertical: true)
-                                .frame(maxWidth: .infinity)
-                                .transition(.move(edge: .top).combined(with: .opacity))
+                            notesPlainText
                         }
+                        #else
+                        notesPlainText
+                        #endif
                     }
                 }
             }
         }
     }
+
+    var notesPlainText: some View {
+        Text(card.notes)
+            .font(.system(size: 14, design: settings.resolvedDesign))
+            .multilineTextAlignment(.center)
+            .foregroundStyle(.white.opacity(0.85))
+            .fixedSize(horizontal: false, vertical: true)
+            .frame(maxWidth: .infinity)
+            .transition(.move(edge: .top).combined(with: .opacity))
+    }
 }
+
 
 // ============================================================
 // MARK: - Dot Indicators
@@ -1219,22 +1785,24 @@ struct FlashcardView: View {
 
 struct DotIndicators: View {
     let total: Int; let current: Int
+    @EnvironmentObject var store: DataStore
     var body: some View {
+        let tc = ThemeColors(settings: store.settings)
         HStack(spacing: 5) {
             let max7 = 7
             if total <= max7 {
-                ForEach(0..<total, id: \.self) { i in dot(i == current) }
+                ForEach(0..<total, id: \.self) { i in dot(i == current, tc: tc) }
             } else {
                 let s = max(0, min(current - 3, total - max7))
                 let e = min(s + max7, total)
-                if s > 0 { Circle().fill(CuteTheme.pink.opacity(0.3)).frame(width: 4, height: 4) }
-                ForEach(s..<e, id: \.self) { i in dot(i == current) }
-                if e < total { Circle().fill(CuteTheme.pink.opacity(0.3)).frame(width: 4, height: 4) }
+                if s > 0 { Circle().fill(tc.dotOverflow).frame(width: 4, height: 4) }
+                ForEach(s..<e, id: \.self) { i in dot(i == current, tc: tc) }
+                if e < total { Circle().fill(tc.dotOverflow).frame(width: 4, height: 4) }
             }
         }.animation(.spring(response: 0.3), value: current)
     }
-    func dot(_ active: Bool) -> some View {
-        Circle().fill(active ? CuteTheme.accent : CuteTheme.pink.opacity(0.45))
+    func dot(_ active: Bool, tc: ThemeColors) -> some View {
+        Circle().fill(active ? CuteTheme.accent : tc.dotInactive)
             .frame(width: active ? 9 : 6, height: active ? 9 : 6)
     }
 }
@@ -1257,10 +1825,12 @@ struct CardFormView: View {
     @State private var aImageData: Data?
     @State private var qDoodleData: Data?
     @State private var aDoodleData: Data?
+    #if canImport(UIKit)
     @State private var selectedQPhoto: PhotosPickerItem? = nil
     @State private var selectedAPhoto: PhotosPickerItem? = nil
     @State private var showQDoodle = false
     @State private var showADoodle = false
+    #endif
     let deckTags: [String]
     var onSave: (Flashcard) -> Void
     private var existingID: UUID?
@@ -1268,15 +1838,18 @@ struct CardFormView: View {
     init(mode: CardFormMode, existingCard: Flashcard? = nil, deckTags: [String] = [], onSave: @escaping (Flashcard) -> Void) {
         self.mode = mode; self.deckTags = deckTags; self.onSave = onSave
 
+        let defaultFont: PlatformFont = PlatformFont.systemFont(ofSize: 17)
+        let smallFont: PlatformFont = PlatformFont.systemFont(ofSize: 15)
+
         let qAttr: NSAttributedString
         if let rtf = existingCard?.questionRTF, let attr = rtfToAttributed(rtf) { qAttr = attr }
-        else { qAttr = NSAttributedString(string: existingCard?.question ?? "", attributes: [.font: UIFont.systemFont(ofSize: 17)]) }
+        else { qAttr = NSAttributedString(string: existingCard?.question ?? "", attributes: [.font: defaultFont]) }
         let aAttr: NSAttributedString
         if let rtf = existingCard?.answerRTF, let attr = rtfToAttributed(rtf) { aAttr = attr }
-        else { aAttr = NSAttributedString(string: existingCard?.answer ?? "", attributes: [.font: UIFont.systemFont(ofSize: 17)]) }
+        else { aAttr = NSAttributedString(string: existingCard?.answer ?? "", attributes: [.font: defaultFont]) }
         let nAttr: NSAttributedString
         if let rtf = existingCard?.notesRTF, let attr = rtfToAttributed(rtf) { nAttr = attr }
-        else { nAttr = NSAttributedString(string: existingCard?.notes ?? "", attributes: [.font: UIFont.systemFont(ofSize: 15)]) }
+        else { nAttr = NSAttributedString(string: existingCard?.notes ?? "", attributes: [.font: smallFont]) }
 
         _questionAttr = State(initialValue: qAttr)
         _answerAttr = State(initialValue: aAttr)
@@ -1298,12 +1871,16 @@ struct CardFormView: View {
             ScrollView {
                 VStack(spacing: 20) {
                     richEditorSection(title: "Question", hint: "", attr: $questionAttr)
+                    #if canImport(UIKit)
                     mediaDoodleRow(label: "Question", imageData: $qImageData, doodleData: $qDoodleData, photoPicker: $selectedQPhoto, showDoodle: $showQDoodle)
+                    #endif
 
                     Divider().padding(.vertical, 4)
 
                     richEditorSection(title: "Answer", hint: "", attr: $answerAttr)
+                    #if canImport(UIKit)
                     mediaDoodleRow(label: "Answer", imageData: $aImageData, doodleData: $aDoodleData, photoPicker: $selectedAPhoto, showDoodle: $showADoodle)
+                    #endif
 
                     Divider().padding(.vertical, 4)
 
@@ -1312,33 +1889,37 @@ struct CardFormView: View {
                 }
                 .padding()
             }
+            #if canImport(UIKit)
             .background(Color(.systemGroupedBackground))
-            .navigationTitle(mode == .add ? "New Card ✨" : "Edit Card")
+            #else
+            .background(Color(.windowBackgroundColor))
+            #endif
+            .navigationTitle(mode == .add ? "New Card \u{2728}" : "Edit Card")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { formToolbar }
+            #if canImport(UIKit)
             .onChange(of: selectedQPhoto) { item in loadPhoto(item, into: $qImageData) }
             .onChange(of: selectedAPhoto) { item in loadPhoto(item, into: $aImageData) }
             .sheet(isPresented: $showQDoodle) { DoodleSheet(doodleData: $qDoodleData) }
             .sheet(isPresented: $showADoodle) { DoodleSheet(doodleData: $aDoodleData) }
+            #endif
         }
     }
 
+    #if canImport(UIKit)
     func mediaDoodleRow(label: String, imageData: Binding<Data?>, doodleData: Binding<Data?>, photoPicker: Binding<PhotosPickerItem?>, showDoodle: Binding<Bool>) -> some View {
         VStack(spacing: 8) {
-            // Image preview
             if let data = imageData.wrappedValue, let img = UIImage(data: data) {
                 Image(uiImage: img).resizable().scaledToFit().frame(maxHeight: 150)
                     .clipShape(RoundedRectangle(cornerRadius: 10))
                 Button("Remove Image", role: .destructive) { imageData.wrappedValue = nil }.font(.caption)
             }
-            // Doodle preview
             if let data = doodleData.wrappedValue, let drawing = try? PKDrawing(data: data) {
                 let img = drawing.image(from: drawing.bounds, scale: 2.0)
                 Image(uiImage: img).resizable().scaledToFit().frame(maxHeight: 120)
                     .background(Color.gray.opacity(0.05), in: RoundedRectangle(cornerRadius: 10))
                 Button("Remove Doodle", role: .destructive) { doodleData.wrappedValue = nil }.font(.caption)
             }
-            // Buttons row
             HStack(spacing: 12) {
                 PhotosPicker(selection: photoPicker, matching: .images) {
                     Label(imageData.wrappedValue == nil ? "Image" : "Change", systemImage: "photo")
@@ -1354,6 +1935,7 @@ struct CardFormView: View {
         .padding(10)
         .background(.white, in: RoundedRectangle(cornerRadius: 12))
     }
+    #endif
 
     func richEditorSection(title: String, hint: String, attr: Binding<NSAttributedString>) -> some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -1384,7 +1966,10 @@ struct CardFormView: View {
                     }
                 }
                 HStack {
-                    TextField("Add tag...", text: $newTag).textInputAutocapitalization(.never)
+                    TextField("Add tag...", text: $newTag)
+                        #if os(iOS)
+                        .textInputAutocapitalization(.never)
+                        #endif
                     Button {
                         let t = newTag.trimmingCharacters(in: .whitespaces).lowercased()
                         if !t.isEmpty && !tags.contains(t) { tags.append(t) }
@@ -1442,6 +2027,7 @@ struct CardFormView: View {
         dismiss()
     }
 
+    #if canImport(UIKit)
     func loadPhoto(_ item: PhotosPickerItem?, into binding: Binding<Data?>) {
         guard let item = item else { return }
         Task {
@@ -1451,12 +2037,14 @@ struct CardFormView: View {
             }
         }
     }
+    #endif
 }
 
 // ============================================================
 // MARK: - Doodle (PencilKit with Tool Picker)
 // ============================================================
 
+#if canImport(UIKit)
 struct DoodleCanvasView: UIViewRepresentable {
     @Binding var drawing: PKDrawing
 
@@ -1469,7 +2057,6 @@ struct DoodleCanvasView: UIViewRepresentable {
         canvas.isOpaque = true
         canvas.overrideUserInterfaceStyle = .light
 
-        // Show the full Apple Notes-style tool picker
         let toolPicker = PKToolPicker()
         context.coordinator.toolPicker = toolPicker
         toolPicker.setVisible(true, forFirstResponder: canvas)
@@ -1483,7 +2070,6 @@ struct DoodleCanvasView: UIViewRepresentable {
     }
 
     func updateUIView(_ uiView: PKCanvasView, context: Context) {
-        // Only update if change came from SwiftUI (e.g. clear button), not from user drawing
         if !context.coordinator.isDrawing && uiView.drawing != drawing {
             uiView.drawing = drawing
         }
@@ -1548,13 +2134,15 @@ struct DoodleSheet: View {
         }
     }
 }
+#endif
+
 
 // ============================================================
 // MARK: - Search View
 // ============================================================
 
 enum TagMatchMode: String, CaseIterable { case any = "Any tag", all = "All tags" }
-enum SortOption: String, CaseIterable { case newest = "Newest", oldest = "Oldest", alphabetical = "A → Z" }
+enum SortOption: String, CaseIterable { case newest = "Newest", oldest = "Oldest", alphabetical = "A \u{2192} Z" }
 
 struct SearchCardItem: Identifiable {
     let id = UUID(); let deck: Deck; let card: Flashcard
@@ -1613,11 +2201,11 @@ struct SearchView: View {
                 resultsList
             }
             .searchable(text: $query, prompt: "Search everything...")
-            .navigationTitle("🔍 Search")
+            .navigationTitle("\u{1F50D} Search")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .topBarLeading) { Button("Done") { dismiss() } }
-                ToolbarItem(placement: .topBarTrailing) {
+                ToolbarItem(placement: .cancellationAction) { Button("Done") { dismiss() } }
+                ToolbarItem(placement: .primaryAction) {
                     if hasActiveFilters {
                         Button("Clear") { selectedTags.removeAll(); selectedDecks.removeAll(); query = "" }
                     }
@@ -1673,7 +2261,7 @@ struct SearchView: View {
                 Text("Decks").font(.caption.bold()).foregroundStyle(.secondary)
                 FlowLayout(spacing: 6) {
                     ForEach(store.decks) { dk in
-                        FilterChip(label: "\(dk.name) (\(dk.cards.count))", icon: "📚", isSelected: selectedDecks.contains(dk.id)) {
+                        FilterChip(label: "\(dk.name) (\(dk.cards.count))", icon: "\u{1F4DA}", isSelected: selectedDecks.contains(dk.id)) {
                             if selectedDecks.contains(dk.id) { selectedDecks.remove(dk.id) } else { selectedDecks.insert(dk.id) }
                         }
                     }
@@ -1713,7 +2301,7 @@ struct SearchView: View {
         Group {
             if results.isEmpty {
                 VStack(spacing: 12) {
-                    Spacer(); Text("🔍").font(.system(size: 40))
+                    Spacer(); Text("\u{1F50D}").font(.system(size: 40))
                     Text(query.isEmpty && !hasActiveFilters ? "Start typing to search" : "No results")
                         .font(.headline).foregroundStyle(.secondary)
                     Spacer()
@@ -1796,10 +2384,11 @@ struct CardPreviewSheet: View {
             }
             .navigationTitle("Preview")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .topBarLeading) { Button("Done") { dismiss() } } }
+            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Done") { dismiss() } } }
         }
     }
 }
+
 
 // ============================================================
 // MARK: - Card List
@@ -1843,8 +2432,8 @@ struct CardListView: View {
             }
             .navigationTitle("All Cards").navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .topBarLeading) { Button("Done") { dismiss() } }
-                ToolbarItem(placement: .topBarTrailing) { EditButton() }
+                ToolbarItem(placement: .cancellationAction) { Button("Done") { dismiss() } }
+                ToolbarItem(placement: .primaryAction) { EditButton() }
             }
         }
     }
@@ -1869,6 +2458,7 @@ struct SettingsView: View {
             Form {
                 backgroundSection
                 toolbarSection
+                iCloudSection
                 Section {
                     Text("These apply to cards without per-card formatting.")
                         .font(.caption).foregroundStyle(.secondary)
@@ -1880,7 +2470,7 @@ struct SettingsView: View {
             }
             .navigationTitle("Settings")
             .navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .topBarLeading) { Button("Done") { dismiss() } } }
+            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Done") { dismiss() } } }
         }
     }
 
@@ -1950,7 +2540,32 @@ struct SettingsView: View {
                 EditButton().font(.caption)
             }
         } footer: {
-            Text("Tap + to pin to toolbar, − to move to menu. Drag to reorder.")
+            Text("Tap + to pin, \u{2212} to remove. Drag to reorder.")
+        }
+    }
+
+    // MARK: iCloud
+    var iCloudSection: some View {
+        Section {
+            Toggle(isOn: Binding(
+                get: { store.settings.iCloudSync },
+                set: { newVal in
+                    if newVal { store.enableICloudSync() }
+                    else { store.disableICloudSync() }
+                }
+            )) {
+                HStack(spacing: 10) {
+                    Image(systemName: "icloud").foregroundStyle(.blue)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("iCloud Sync").font(.subheadline)
+                        Text("Sync decks across devices").font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+            }
+        } header: {
+            Text("Sync")
+        } footer: {
+            Text("Keeps your decks and settings in sync across all your Apple devices.")
         }
     }
 
@@ -2030,6 +2645,7 @@ struct SettingsView: View {
     }
 }
 
+
 // ============================================================
 // MARK: - Export View
 // ============================================================
@@ -2048,14 +2664,20 @@ struct ExportView: View {
                 Section("Format") {
                     Button { exportCSV() } label: { Label("CSV", systemImage: "tablecells") }
                     Button { exportJSON() } label: { Label("JSON", systemImage: "doc.text") }
+                    #if canImport(UIKit)
                     Button { exportPDF() } label: { Label("PDF", systemImage: "doc.richtext") }
+                    #endif
                 }
                 Section { Text("\(deck?.cards.count ?? 0) cards").font(.caption).foregroundStyle(.secondary) }
             }
             .navigationTitle("Export").navigationBarTitleDisplayMode(.inline)
-            .toolbar { ToolbarItem(placement: .topBarLeading) { Button("Done") { dismiss() } } }
+            .toolbar { ToolbarItem(placement: .cancellationAction) { Button("Done") { dismiss() } } }
             .sheet(isPresented: $showShare) {
-                if let url = exportURL { ShareSheet(url: url) }
+                if let url = exportURL {
+                    #if canImport(UIKit)
+                    ShareSheet(url: url)
+                    #endif
+                }
             }
         }
     }
@@ -2080,6 +2702,7 @@ struct ExportView: View {
         }
     }
 
+    #if canImport(UIKit)
     func exportPDF() {
         guard let deck = deck else { return }
         let pw: CGFloat = 612; let ph: CGFloat = 792; let m: CGFloat = 50; let cw = pw - m * 2
@@ -2112,6 +2735,7 @@ struct ExportView: View {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("\(deck.name).pdf")
         try? data.write(to: url); exportURL = url; showShare = true
     }
+    #endif
 
     func share(_ text: String, _ name: String) {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent(name)
@@ -2120,6 +2744,7 @@ struct ExportView: View {
     }
 }
 
+#if canImport(UIKit)
 struct ShareSheet: UIViewControllerRepresentable {
     let url: URL
     func makeUIViewController(context: Context) -> UIActivityViewController {
@@ -2127,6 +2752,209 @@ struct ShareSheet: UIViewControllerRepresentable {
     }
     func updateUIViewController(_ uvc: UIActivityViewController, context: Context) {}
 }
+#endif
+
+
+// ============================================================
+// MARK: - Import View
+// ============================================================
+
+struct ImportView: View {
+    @EnvironmentObject var store: DataStore
+    @Environment(\.dismiss) var dismiss
+    var targetDeckID: UUID? = nil
+
+    @State private var showFilePicker = false
+    @State private var importedCards: [Flashcard] = []
+    @State private var importFileName = ""
+    @State private var importError = ""
+    @State private var showError = false
+    @State private var selectedDeckID: UUID? = nil
+    @State private var newDeckName = ""
+    @State private var importMode = "existing" // "existing" or "new"
+
+    var body: some View {
+        NavigationStack {
+            List {
+                Section("Source") {
+                    Button { showFilePicker = true } label: {
+                        Label("Choose File (TXT, CSV, or JSON)", systemImage: "doc.badge.plus")
+                    }
+                    if !importFileName.isEmpty {
+                        HStack {
+                            Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(importFileName).font(.subheadline.weight(.medium))
+                                Text("\(importedCards.count) cards found").font(.caption).foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                }
+
+                if importedCards.isEmpty && importFileName.isEmpty {
+                    Section("TXT Format Guide") {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("Type your cards in a .txt file like this:")
+                                .font(.caption).foregroundStyle(.secondary)
+                            Text("Q: What is the capital of France?\nA: Paris\nN: Western Europe\nT: geography, europe\n\nQ: What is 2 + 2?\nA: 4")
+                                .font(.system(size: 12, design: .monospaced))
+                                .foregroundStyle(.primary)
+                                .padding(10)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .background(Color.gray.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
+                            Text("Q: and A: are required. N: (notes) and T: (tags) are optional. Separate cards with a blank line.")
+                                .font(.caption2).foregroundStyle(.tertiary)
+                        }
+                        .padding(.vertical, 4)
+                    }
+                }
+
+                if !importedCards.isEmpty {
+                    Section("Destination") {
+                        Picker("Import to", selection: $importMode) {
+                            Text("Existing Deck").tag("existing")
+                            Text("New Deck").tag("new")
+                        }.pickerStyle(.segmented)
+
+                        if importMode == "existing" {
+                            if store.decks.isEmpty {
+                                Text("No decks yet \u{2014} create a new one").font(.caption).foregroundStyle(.secondary)
+                            } else {
+                                ForEach(store.decks) { deck in
+                                    HStack {
+                                        Text("\u{1F4DA} \(deck.name)")
+                                        Spacer()
+                                        if selectedDeckID == deck.id {
+                                            Image(systemName: "checkmark.circle.fill").foregroundStyle(CuteTheme.accent)
+                                        }
+                                    }
+                                    .contentShape(Rectangle())
+                                    .onTapGesture { selectedDeckID = deck.id }
+                                }
+                            }
+                        } else {
+                            TextField("New deck name", text: $newDeckName)
+                        }
+                    }
+
+                    Section("Preview") {
+                        ForEach(importedCards.prefix(5)) { card in
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(card.question).font(.subheadline.weight(.medium)).lineLimit(1)
+                                Text(card.answer).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                            }
+                        }
+                        if importedCards.count > 5 {
+                            Text("... and \(importedCards.count - 5) more")
+                                .font(.caption).foregroundStyle(.tertiary)
+                        }
+                    }
+
+                    Section {
+                        Button {
+                            performImport()
+                        } label: {
+                            HStack {
+                                Spacer()
+                                Text("Import \(importedCards.count) Cards")
+                                    .font(.subheadline.weight(.bold))
+                                    .foregroundStyle(.white)
+                                Spacer()
+                            }
+                            .padding(.vertical, 8)
+                            .background(canImport ? CuteTheme.accent : Color.gray, in: RoundedRectangle(cornerRadius: 10))
+                        }
+                        .disabled(!canImport)
+                        .listRowBackground(Color.clear)
+                    }
+                }
+            }
+            .navigationTitle("Import")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("Done") { dismiss() } }
+            }
+            .fileImporter(isPresented: $showFilePicker, allowedContentTypes: [.commaSeparatedText, .json, .plainText, .text], allowsMultipleSelection: false) { result in
+                handleFileImport(result)
+            }
+            .alert("Import Error", isPresented: $showError) {
+                Button("OK") {}
+            } message: {
+                Text(importError)
+            }
+            .onAppear {
+                if let tid = targetDeckID { selectedDeckID = tid; importMode = "existing" }
+            }
+        }
+    }
+
+    var canImport: Bool {
+        if importedCards.isEmpty { return false }
+        if importMode == "existing" { return selectedDeckID != nil }
+        return !newDeckName.trimmingCharacters(in: .whitespaces).isEmpty
+    }
+
+    func handleFileImport(_ result: Result<[URL], Error>) {
+        switch result {
+        case .success(let urls):
+            guard let url = urls.first else { return }
+            guard url.startAccessingSecurityScopedResource() else {
+                importError = "Could not access file"; showError = true; return
+            }
+            defer { url.stopAccessingSecurityScopedResource() }
+
+            do {
+                let data = try Data(contentsOf: url)
+                importFileName = url.lastPathComponent
+
+                if url.pathExtension.lowercased() == "json" {
+                    if let cards = parseJSONImport(data), !cards.isEmpty {
+                        importedCards = cards
+                    } else {
+                        importError = "Could not parse JSON. Expected array of cards with 'question' and 'answer' fields."; showError = true
+                    }
+                } else {
+                    // CSV, TXT, or plain text
+                    guard let text = String(data: data, encoding: .utf8) else {
+                        importError = "Could not read file as text"; showError = true; return
+                    }
+
+                    // Try plain text Q:/A: format first
+                    let txtCards = parsePlainTextImport(text)
+                    if !txtCards.isEmpty {
+                        importedCards = txtCards
+                    } else {
+                        // Fall back to CSV
+                        let csvCards = parseCSVImport(text)
+                        if csvCards.isEmpty {
+                            importError = "No valid cards found.\n\nSupported formats:\n\u{2022} Q:/A: format (Q: question\\nA: answer)\n\u{2022} Tab-separated (question[tab]answer)\n\u{2022} CSV with header row"; showError = true
+                        } else {
+                            importedCards = csvCards
+                        }
+                    }
+                }
+            } catch {
+                importError = error.localizedDescription; showError = true
+            }
+        case .failure(let error):
+            importError = error.localizedDescription; showError = true
+        }
+    }
+
+    func performImport() {
+        if importMode == "existing", let did = selectedDeckID {
+            store.importCards(to: did, cards: importedCards)
+        } else if importMode == "new" {
+            let name = newDeckName.trimmingCharacters(in: .whitespaces)
+            guard !name.isEmpty else { return }
+            var deck = Deck(name: name)
+            deck.cards = importedCards
+            store.importDeck(deck)
+        }
+        dismiss()
+    }
+}
+
 
 // ============================================================
 // MARK: - Filter Chip
